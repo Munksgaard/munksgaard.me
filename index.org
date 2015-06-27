@@ -3,16 +3,16 @@
 
 This is the personal site of Philip Munksgaard.
 
-** Articles and posts
-
-There is nothing here yet.
-
-** About me
+* About me
 
 I am a MSc in Computer Science from the University of Copenhagen (2015). I like
 programming languages, programming language theory, algorithms, concurrency and
 parallelism.
 
-** Links
+* Articles and posts
+
+ - [[file:30days/smlfuck.org][smlfuck]]
+
+* Links
 
 https://github.com/Munksgaard/

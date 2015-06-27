@@ -1,0 +1,59 @@
+#+TITLE: smlfuck
+#+DATE: <2015-06-27 Sat>
+
+* Brainfuck in Standard ML
+
+I've got plenty of time on my hands this summer, so I decided that I wanted to
+implement interpreters or compilers for a lot of different languages (using
+different languages as well). The goal is to implement a compiler or interpreter
+for 30 different languages in 30 days.
+
+This is day 1.
+
+Today I wish to implement [[https://en.wikipedia.org/wiki/Brainfuck][Brainfuck]] in Standard ML. I am going to use Moscow ML,
+but the code should be more or less portable to MLton, SML/NJ and so on.
+
+** Working with MosML in Emacs
+
+https://gist.github.com/Munksgaard/3620796
+
+** About Brainfuck
+
+https://en.wikipedia.org/wiki/Brainfuck
+
+** Link
+
+https://github.com/Munksgaard/smlfuck
+
+** How did it go?
+
+I started out tokenizing the input string and simply matching over the list of
+tokens. The result can be seen in commit 305c91.
+However, this turned out to be impractical for implementing loops. Instead, I
+decided to converted the source code into an actual AST. The Brainfuck syntax is
+very simple to model, so I could make do with this simple datatype declaration:
+
+#+BEGIN_SRC
+    datatype ast = Right
+                 | Left
+                 | Inc
+                 | Dec
+                 | Output
+                 | Input
+                 | Loop of ast list
+#+END_SRC
+
+I am also very happy with how the parser turned out. Remembering how nice it is
+to parse things in Haskell using the Parsec monad, the `ast` function uses a
+little bind operator that I wrote.
+
+The actual interpreter is a bit more messy: I'm using a mutable array, which in
+itself isn't very idiomatic in Standard ML, but it also makes the code a bit
+ugly in my opinion. I considered using a vector instead, but I was afraid it'd
+be too inefficient (For what? No idea, I'm not going to do anything with it).
+
+All in all, I am quite happy with the result. This was the first language I
+wanted to implement an interpreter for, so it's taken a little bit longer than I
+expected, around 3 hours. smlfuck could do with a bit more error handling,
+bounds checking, I/O optimization and such but I guess it's alright for
+now.
