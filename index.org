@@ -9,9 +9,16 @@ I am a MSc in Computer Science from the University of Copenhagen (2015). I like
 programming languages, programming language theory, algorithms, concurrency and
 parallelism.
 
-* Articles and posts
+* Random unfinished projects
 
  - [[file:30days/smlfuck.org][smlfuck]]
+ - [[file:30days/lispski.org][lispski]]
+ - [[file:30days/primlisp.org][primlisp]]
+
+* Papers
+
+ - [[file:papers/laumann-munksgaard-larsen.pdf][Session Types for Rust]]. To be presented at WGP '15
+ - [[file:papers/munksgaard-laumann-thesis.pdf][Practical Session Types in Rust]]. MSc thesis, June 2015.
 
 * Links
 

@@ -43,9 +43,9 @@ very simple to model, so I could make do with this simple datatype declaration:
                  | Loop of ast list
 #+END_SRC
 
-I am also very happy with how the parser turned out. Remembering how nice it is
-to parse things in Haskell using the Parsec monad, the `ast` function uses a
-little bind operator that I wrote.
+I am also very happy with how the parser turned out. I'm abusing the ~>>=~
+operator bit; it's not equivalent to bind, but I think it makes the code easy to
+work with.
 
 The actual interpreter is a bit more messy: I'm using a mutable array, which in
 itself isn't very idiomatic in Standard ML, but it also makes the code a bit
