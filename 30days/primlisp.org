@@ -1,0 +1,78 @@
+#+TITLE: primlisp
+#+DATE: <2015-06-29 Mon>
+
+* Primitive Lisp in Rust
+
+This is day 3.
+
+Today I want to implement a primitive Lisp interpreter in Rust.
+
+** Link
+
+https://github.com/Munksgaard/primlisp
+
+** How did it go?
+
+Well, it turns out that my initial plan was too ambitious. What a surprise. The
+plan was to implement an interpreter for a very simple lisp. Unfortunately, I
+had stuff to do, so I only got as far as the parser.
+
+The parser is implemented using rust-peg, a Rust library for parsing expression
+grammers. As such, the entire parsing is as simple as
+
+#+BEGIN_SRC
+read -> super::AST
+    = cons / integer / nil / symbol
+
+cons -> super::AST
+    = "(" space car:read space "." space cdr:read space ")"
+    { super::AST::Cons(Box::new(car),
+      Box::new(cdr)) }
+
+nil -> super::AST
+    = "()" { super::AST::Nil }
+
+integer -> super::AST
+    = sign:"-"? n:num
+    { super::AST::Integer(if sign.is_some() { - n } else { n }) }
+
+symbol -> super::AST
+    = [a-zA-Z][a-zA-Z0-9\-]* { super::AST::Symbol(match_str.to_string()) }
+
+num -> isize
+    = [0-9]+ { match_str.parse().unwrap() }
+
+space -> ()
+    = [ \n\t]*
+#+END_SRC
+
+which I think is quite elegant. Of course, primlisp can only handle integers,
+cons-cells, nil and symbols, so that explains the extremely simple grammar, but
+still.
+
+I was going to make primlisp a Lisp-1 for simplicity, but I've run into a
+roadblock when trying to define a symbol-table. With lispski it was easy: Lisp
+is untyped, so I could just stuff closures into the table, but what is the type
+of a symbol-table?
+
+Right now, I'm going for a vector of ~(String, Something)~, where the ~String~ is
+the symbol name, and the ~Something~ is... something else. What are possible
+values for ~Something~? Symbols should be bindable to integers, nil, conses,
+functions (both primitive and compound). So an enum like
+
+#+BEGIN_SRC
+enum Something {
+    Integer(AST::Integer),
+    Nil,
+    Cons(AST::Cons),
+    PrimFun(SomeType),
+    CompoundFun(SomeType2),
+}
+#+END_SRC
+
+So far so good, but what is ~SomeType~? Primitive functions include ~cons~ and
+~car~, but they have different types: ~cons: Fn(AST, AST) -> AST~ and ~car:
+Fn(AST) -> AST~. I could curry them, like in lispski, but then ~cons~ would just
+be ~cons: Fn(AST) -> Fn(AST) -> AST~, and that's no good either.
+
+I'm rambling, and now I'll go to bed. Perhaps tomorrow I'll think of something.

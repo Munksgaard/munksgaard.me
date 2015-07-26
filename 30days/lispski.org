@@ -1,0 +1,57 @@
+#+TITLE: lispski
+#+DATE: <2015-06-28 Sun>
+
+* SKI combinators in Lisp
+
+This is day 2.
+
+Today turned out to be messy. At first I wanted to implement a Forth interpreter
+in Rust, but I'm not very familiar with Forth, so I spent way too much time
+reading up on the specs before I could actually get started. It also occured to
+me that it might actually be more fun to try and write an interpreter in
+assembler. I might try my hand at Forth in 6502 assembler, which I've been
+playing around with.
+
+In the evening I decided to leave Forth for now, and instead implement something
+extremely simple: an SKI combinator interpreter in Common Lisp.
+
+** About SKI Combinators
+
+https://en.wikipedia.org/wiki/SKI_combinator_calculus
+
+** Link
+
+https://github.com/Munksgaard/lispski
+
+** How did it go?
+
+After _a lot_ of initial mucking around, I finally decided that the basic terms,
+~S~, ~K~, and ~I~, should be implemented as curried functions in a function
+table. That way it'll be easier to extend the implementation to include user
+defined functions.
+
+It took me a few tries to get the ~ski-step~ function correct, but it's actually
+quite simple, but only because it requires the terms to be in a SKI-tree as
+described in the Wikipedia article. If ~xs~ is a pair it evaluates each term and
+applies the first to the second one. Either the evaluated first term is a term
+or a closure: If it is a closure use that, otherwise look up the function in the
+function-table.
+
+As soon as ~ski-step~ was finished, the only thing that posed a problem was
+~ski-treeify~, which turns a right-handed tree into a left-handed tree, such as
+SKI-trees must be.
+
+The result is not too good, but I've been under some time constraints, having
+started in the evening. I'd like to extend the implementation to allow
+declarations like:
+
+#+BEGIN_SRC
+    F = SK
+#+END_SRC
+
+To make big programs easier to write. I'm not sure it'd play well with my
+current everything-is-one-char approach, but if I wanted to play with boolean
+logic or arithmetic, it'd crucial.
+
+Another fun project, and I've learned more about how SKI-combinators work. Now
+it's time for bed!
