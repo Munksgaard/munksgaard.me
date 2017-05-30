@@ -1,0 +1,252 @@
+#+TITLE: Typechecking toyml
+#+DATE: <2017-04-11 Tue>
+
+* A Simple Typechecker in Standard ML
+
+I've been wanting to write a compiler for a simple functional language for a
+long time, and I finally took the first steps in that direction some time ago,
+when I wrote a simple Hindley-Milner typechecker for a very simple functional
+language. It has no practical applications whatsoever -- I didn't even write a
+parser -- but it was a fun experience to learn more about Algorithm W and I've
+been meaning to document that process, and so this is it.
+
+* toyml - A minimalistic language
+
+I'm not interested in a full fledged or even practically usable language for the
+moment, so toyml is basically just the typed lambda calculus. It supports
+integers, bools, lambda functions, function application and let-bindings.
+
+#+BEGIN_SRC sml
+type ident = string
+
+datatype expr = Int of int
+              | Bool of bool
+              | Ident of ident
+              | Let of string * expr * expr
+              | Apply of expr * expr
+              | Lambda of string * expr
+#+END_SRC
+
+The types follow naturally.
+
+#+BEGIN_SRC sml
+datatype ty = Int
+            | Bool
+            | Var of ident
+            | Fun of ty * ty
+#+END_SRC
+
+* Algorithm W
+
+Algorithm W is a simple type checking algorithm, variants of which are used in
+Standard ML, Haskell and similar languages. It was first presented by Luis Damas
+and Robin Milner in 1982 and has since been extended in a multitude of ways.
+
+In addition to the types defined above, we also define the following types for
+/substitutions/, /type schemes/ and /type environments/.
+
+#+BEGIN_SRC sml
+type substitution = (ident * ty)
+
+type tyScheme = ident list * ty
+
+type tyEnv = (ident * tyScheme) list
+#+END_SRC
+
+Substitutions are the result of unification, which we'll describe in more detail
+later. For now, it's enough to know that a substitution is a mapping from a type
+variable to some type. Types will be familiar to most people, but type schemes
+and type environments deserve an elaboration.
+
+In order to understand type schemes, let's use a motivating example that I have
+borrowed from Wikipedia[fn:1].
+
+#+BEGIN_SRC
+  let foo = fn y => x
+  in foo
+#+END_SRC
+
+In this example, we cannot assign a meaningful type to ~foo~ without knowing the
+type of ~x~. If we know that the type of ~x~ is ~Int~, then ~foo~'s type is
+clearly ~α → Int~, but what if ~foo~ is part of a larger definition, like the
+following example:
+
+#+BEGIN_SRC
+  let bar = fn x =>
+    let foo = fn y => x
+    in foo
+  in bar
+#+END_SRC
+
+It might be tempting to say that ~foo~ has the type ~β → α~, but that is only
+because we expect the type of ~bar~ to be ~α → β → α~. However, there's
+clearly a difference between the ~α~ in ~foo~'s type and the ~α~ that appears in
+~bar~'s type: The ~α~ in ~bar~ can be literally any type, but the ~α~ in ~foo~
+can only be the same ~α~ that's in ~bar~. We might say that the ~α~ in ~foo~ is
+bound by it's context, whereas the ~α~ in ~bar~ is /free/, even though both are
+type variables. The purpose of type schemes is simply to be able to distinguish
+between bound and free variables when describing the type of an expression.
+Therefore, a type scheme consists of a type and a list of the bound type
+variables in that type. We say that ~foo~ has the type ~∀β . α → β~ [fn:2].
+
+Type environments are a bit easier to understand. Suppose you have an ~if~
+statement where both branches use a variable ~x~. Whatever we have inferred
+about the type of ~x~ from the first branch needs to be carried over to the type
+inference of the second branch. So a type environment is a list of mappings from
+identifiers to type schemes.
+
+** Free Variables
+
+The first thing we need are functions to find the /free variables/ in types,
+type schemes and type environments. A free variable in a type ~t~ is simply the
+list of all type variables that appear in ~t~.
+
+#+BEGIN_SRC sml
+(* freevars : ty -> ident list
+ * Lists the free variables in ty. *)
+fun freevars Int = []
+  | freevars Bool = []
+  | freevars (Var id) = [id]
+  | freevars (Fun (t1, t2)) = freevars t1 @ freevars t2
+#+END_SRC
+
+Because a type scheme are defined by a type ~t~ and a list of bound variables in
+that type, finding the free variables in a type scheme is simply a matter of
+subtracting the bound variables from the free variables in ~t~.
+
+#+BEGIN_SRC sml
+(* freevarsScheme : tyScheme -> ident list
+ * Find the free variables in the given type scheme. *)
+fun freevarsScheme (ids, t) =
+  freevars t except ids
+#+END_SRC
+
+Similarly, the free variables in a type environment is simply the union of the free
+variables in it's type schemes.
+
+#+BEGIN_SRC sml
+(* freevarsEnv : tyEnv -> ident list
+ * Find the free variables in the given type environment. *)
+fun freevarsEnv env =
+  List.concat (map (fn (_, ts) => freevarsScheme ts) env)
+#+END_SRC
+
+** Unifiers, Unification and Substitutions
+
+A unifier tries to find substitutions that unify two types. For instance, the
+result of unifying a type ~int~ with a type ~α~ is the substitution ~(α, int)~.
+This is used to unify the type of a given function ~f~ with the type of a given
+argument ~α~ in a function application ~f a~. The unification function ~mgu~
+(most general unifier) achieves this with the help of ~varBind~, which attempts
+to bind a variable to a type.
+
+#+BEGIN_SRC sml
+(* varBind : ident -> ty -> substitution list
+ * Tries to bind ty to the type variable given by id.
+ * If ty is a type variable, simply perform the binding, otherwise perform
+ * the occurs check: If id is a free variable in ty, then we'll get a
+ * recursive substitution, which we consider an error. *)
+fun varBind id ty =
+  case ty of
+      Var id' => if id = id' then []
+                else [(id, ty)]
+    | _ => if (freevars ty) contains id then
+             raise Fail "occurs check"
+           else
+             [(id, ty)]
+
+(* mgu : ty -> ty -> substitution list
+ * Find the most general substitution that unifies t1 and t2. *)
+fun mgu (Fun (l, r)) (Fun (l', r')) =
+  let val s1 = mgu l l'
+      val s2 = mgu (apply s1 r) (apply s1 r')
+  in compose s1 s2
+  end
+  | mgu (Var u) t = varBind u t
+  | mgu t (Var u) = varBind u t
+  | mgu Int Int = []
+  | mgu Bool Bool = []
+  | mgu _ _ = raise Fail "no unification found"
+#+END_SRC
+
+The unification itself is quite simple, but note that we do not allow recursive
+type definitions in ~varBind~. That is, when unifying a type variable ~α~ with
+another type ~t~, if ~α~ is a free variable in ~t~, we raise an exception.
+
+** Type Inference
+
+Before we move on to ~infer~, let's quickly discuss ~instantiate~ and
+~generalize~. In short, ~generalize~ takes a type and binds all the free
+type variables except those that are also free in the environment, while
+~instantiate~ takes a type scheme and returns a type where all the bound
+variables have been isntantiated to fresh type variables. We can consider them
+to be each others dual.
+
+#+BEGIN_SRC sml
+(* instantiate : tyScheme -> ty
+ * Create a fresh type from a given type scheme. *)
+fun instantiate (ids, ty) =
+  let val subs = map (fn id => (id, getFresh ())) ids
+  in apply subs ty end
+
+(* generalize : tyEnv -> ty -> tyScheme
+ * Generalizes a type into a type scheme in the given type environment.
+   For instance, the concrete type `'a -> 'a`, generalizes to
+   the type scheme `forAll 'a : 'a -> 'a`, but only if if `'a` is not
+   also free in the type environment.
+   Generalizing is the opposite of instantiating. *)
+fun generalize env ty =
+  (freevars ty except freevarsEnv env, ty)
+#+END_SRC
+
+Finally, we have ~infer~, the actual type inference function.
+
+#+BEGIN_SRC sml
+(* infer : tyEnv -> expr -> substitution list * ty
+ * Infer the type of an expression in the given type environment. *)
+fun infer env (Expr.Lambda (x, e)) : (substitution list * ty) =
+  let val tv = getFresh ()
+      val env' = List.filter (fn (y, _) => x <> y) env
+      val env'' = (x, ([], tv)) :: env'
+      val (s1, t1) = infer env'' e
+  in (s1, Fun (apply s1 tv, t1)) end
+  | infer env (Expr.Apply (e1, e2)) =
+    let val (s1, t1) = infer env e1
+        val (s2, t2) = infer (applyEnv s1 env) e2
+        val fresh = getFresh ()
+        val s3 = mgu (apply s2 t1) (Fun (t2, fresh))
+    in (compose s3 (compose s2 s1), apply s3 fresh)
+    end
+  | infer env (Expr.Let (x, e1, e2)) =
+    let val (s1, t1) = infer env e1
+        val env' = List.filter (fn (y, _) => x <> y) env
+        val t' = generalize (applyEnv s1 env) t1
+        val env'' = (x, t') :: env'
+        val (s2, t2) = infer (applyEnv s1 env'') e2
+    in (compose s2 s1, t2) end
+  | infer _ (Expr.Int _) = ([], Int)
+  | infer _ (Expr.Bool _) = ([], Bool)
+  | infer env (Expr.Ident x) =
+    case lookup env x of
+        SOME ts => ([], instantiate ts)
+      | NONE => raise Fail "Unbound var"
+#+END_SRC
+
+* Now what?
+
+My plan is to slowly extend this language and its implementation in whatever way
+I find interesting. My first step might be to write a parser, but I'd like to
+experiment with subtyping, á la [[https://www.cl.cam.ac.uk/~sd601/mlsub/][MLsub]]. At some point I'd also like to actually
+generate machine code, probably via LLVM, but that's probably a bit further off.
+
+The whole project is available on [[https://github.com/Munksgaard/toyml][GitHub]]. Comments, suggestions, pull requests
+and bug reports are more than welcome.
+
+
+[fn:1]
+https://en.wikipedia.org/w/index.php?title=Hindley%E2%80%93Milner_type_system&oldid=780057717#Free_type_variables
+
+[fn:2] You'll notice the correspondence with the universal quantifier, which
+might make you wonder if there's a similar correspondence with existential types.
+Unfortunately, that's a bit beyond the scope of this post, but I hope to get back to
+it eventually.

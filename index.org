@@ -15,6 +15,9 @@ parallelism.
  - [[file:30days/lispski.org][lispski]]
  - [[file:30days/primlisp.org][primlisp]]
 
+* toyml
+ - [[file:toyml/typechecker.org][Typechecking toyml]]
+
 * Papers
 
  - [[file:papers/laumann-munksgaard-larsen.pdf][Session Types for Rust]]. To be presented at WGP '15
