@@ -5,9 +5,10 @@ This is the personal site of Philip Munksgaard.
 
 * About me
 
-I am a MSc in Computer Science from the University of Copenhagen (2015). I like
-programming languages, programming language theory, algorithms, concurrency and
-parallelism.
+Currently doing a PhD at the University of Copenhagen, working on the parallel
+functional programming language Futhark. I am a MSc in Computer Science from the
+University of Copenhagen (2015). I like programming languages, programming
+language theory, algorithms, concurrency and parallelism.
 
 * Random unfinished projects
 
