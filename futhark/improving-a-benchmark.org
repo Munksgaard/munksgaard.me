@@ -1,0 +1,385 @@
+#+TITLE: Improving a benchmark
+#+DATE: <2020-01-14 Tue>
+
+* Futhark
+
+I've recently begun work on a PhD at the university of Copenhagen, working on a
+parallel programming language called Futhark. The goal is to help address some
+memory allocation issues in the language, specifically by employing static
+analysis at compile time to avoid things like unnecessary buffer allocations.
+I'm still learning about the language and how to think about the generated GPU
+code, and to that end I have been spending some time trying to improve a
+benchmark program written in Futhark.
+
+* The Benchmark
+
+The benchmark is called =lud=, it computes an LU decomposition of a given matrix
+in parallel, and it is from the parallel programming benchmark suite called
+[[http://rodinia.cs.virginia.edu/][Rodinia]]. Troels Henriksen and Cosmin Oancea have written the initial
+translations of the =lud= benchmark, which are available [[https://github.com/diku-dk/futhark-benchmarks/tree/c06d8e7627f1c56747fee94ffc4b009a5be9adb5/rodinia/lud][here]]. Specifically, I'm
+measuring myself against the =lud-clean.fut= implementation.
+
+Let's first examine how the initial Futhark implementation is doing compared to
+the original OpenCL implementation from Rodinia, both using block sizes of 16.
+
+All benchmarks are performed on a Intel Xeon E5-2650 v2 2.60GHz computer with a
+GeForce RTX 2080 Ti GPU. I am using version 3.1 of the Rodinia benchmark[fn:1] and
+Futhark at commit 73b44b1 (from 2020-01-14). In order to run the Rodinia
+benchmark, first compile the benchmark using ~make~ and then run the program to
+get 11 samples, discarding the first.
+
+#+BEGIN_SRC
+make
+./lud -i ../../../data/lud/2048.dat
+#+END_SRC
+
+To run the Futhark benchmark, first auto tune =lud-clean.fut=, and then run the
+benchmark using =futhark bench=:
+
+#+BEGIN_SRC
+FUTHARK_INCREMENTAL_FLATTENING=1 futhark autotune --backend=opencl lud-clean.fut
+FUTHARK_INCREMENTAL_FLATTENING=1 futhark bench --backend=opencl lud-clean.fut
+#+END_SRC
+
+Note that I have enabled incremental flattening, as we'll depend on that
+for some of our later optimizations. To read more about incremental flattening
+in Futhark, read [[https://futhark-lang.org/publications/array19.pdf][Data-Parallel Flattening by Expansion]] by Elsman et al.
+
+| Matrix size |                   Rodinia |                    Futhark | Difference |
+|-------------+---------------------------+----------------------------+------------|
+|             |                       <r> |                        <r> |            |
+|       64x64 |   74.4 \mu{}s (RSD: 0.15) |   692.0 \mu{}s (RSD: 0.10) |    +830.1% |
+|     256x256 |  285.2 \mu{}s (RSD: 0.07) |  2816.0 \mu{}s (RSD: 0.13) |    +887.3% |
+|     515x512 |  566.6 \mu{}s (RSD: 0.09) |  5427.1 \mu{}s (RSD: 0.12) |    +857.8% |
+|   2048x2048 | 2189.1 \mu{}s (RSD: 0.01) | 99729.1 \mu{}s (RSD: 0.04) |   +4455.7% |
+
+As we can see, the Futhark implementation performs significantly worse.
+
+* ~lud_perimeter_upper~
+
+The bulk of the work in the current Futhark implementation of =lud= is done by
+the four helper functions ~lud_diagonal~, ~lud_perimeter_upper~,
+~lud_perimeter_lower~ and ~lud_internal~. In Rodinia ~lud_perimeter_upper~ and
+~lud_perimeter_lower~ are handled by the same function, ~lud_perimeter~, but in
+the Futhark benchmark they've been split up into two separate functions. Let us
+first try to understand the implementation of ~lud_perimeter_upper~ and see how
+it compares with the implementation in Rodinia.
+
+** Inspecting the implementation
+
+#+BEGIN_SRC futhark
+let lud_perimeter_lower [m][b] (diag: [b][b]f32) (a0s: [m][b][b]f32): *[m][b][b]f32 =
+    let a1s = map (\ (x: [b][b]f32): [b][b]f32  -> transpose(x)) a0s in
+    let a2s =
+        map  (\a1: [b][b]f32  ->
+              map  (\row0: [b]f32  ->   -- Upper
+                    loop row=replicate b 0.0f32 for j < b do
+                    let sum = (loop sum=0.0f32 for k < j do sum + diag[j,k] * row[k])
+                    let row[j] = row0[j] - sum
+                    in  row
+                   ) a1
+             ) a1s
+    in map (\x: [b][b]f32 -> transpose(x)) a2s
+#+END_SRC
+
+~lud_perimeter_upper~ takes a b\times{}b matrix called ~diag~ which is used to multiply
+with and an array of b\times{}b matrices or blocks called ~a0s~. First, we transpose
+each block in ~a0S~ and then we do a parallel map over each block and another
+one over each row in the block. For each cell in the row we compute the dot
+product of the previously updated values in the row and a row in ~diag~ and
+subtract it from the original value. In Futhark notation, the value of each
+updated cell A[i,j] is ~dotprod row[:j] diag[j, :j]~, where ~row[:j]~ has
+already been updated. Although we are mapping over each row in the matrices,
+because the original matrix has been transposed, it is helpful to think of the
+parallelism as happening on a per-column basis. Each parallel map then has an
+inner loop that computes the actual sum.
+
+If we inspect the hand-written kernel from the Rodinia implementation of =lud=,
+we can see that the two functions from =lud-clean.fut= have been merged into
+one, and we can see that Rodinia uses ~BLOCK_SIZE*2~ threads, where the threads
+with ~tx < BLOCK_SIZE~ handle the upper perimeter and the others handle the
+lower perimeter. The loop itself however, looks quite similar to what we'd
+expect from =lud-clean.fut=. However, if we look a bit further up in the OpenCL
+implementation, we see that it is using local memory, and spends quite a bit of
+time moving the matrices to and from those local stores. Thinking about it, that
+makes a lot of sense, since we'll have ~BLOCK_SIZE~ reads from each entry
+~peri_row[j, tx]~, and reading from global memory is much more expensive than
+reading from local memory. The same goes for writing to ~peri_row[i, tx]~. It's
+reasonable to suspect that a lot of our performance loss is due to using global
+memory instead of local memory. Let's see if we can confirm our suspicions.
+
+To verify that ~lud_perimeter_upper~ uses global memory but is otherwise mostly
+identical to the implementation from Rodinia, we first extract the function into
+its own file, just to make the generated code easier to understand. We'll need
+to change the function name to ~main~ or change the function into an entry, but
+then we can simply compile the code using
+
+#+BEGIN_SRC
+FUTHARK_INCREMENTAL_FLATTENING=1 futhark opencl lud_perimeter_upper.fut
+#+END_SRC
+
+and then dump the OpenCL kernel using
+
+#+BEGIN_SRC
+./lud_perimeter_upper --dump-opencl lud_perimeter_upper.cl
+#+END_SRC
+
+The main bit of code that we're interested in looks like this:
+
+#+BEGIN_SRC opencl
+  for (int32_t j_5811 = 0; j_5811 < b_5471; j_5811++) {
+    float sum_5812;
+    float sum_5813 = 0.0F;
+
+    for (int32_t k_5814 = 0; k_5814 < j_5811; k_5814++) {
+      float x_5815 = ((__global float *) diag_mem_5827)[j_5811 *
+                                                        b_5472 +
+                                                        k_5814];
+      float y_5816 = ((__global float *) mem_5831)[phys_tid_5617 +
+                                                   k_5814 *
+                                                   (num_groups_5804 *
+                                                    segmap_group_sizze_5803)];
+      float y_5817 = x_5815 * y_5816;
+      float res_5818 = sum_5813 + y_5817;
+      float sum_tmp_5862 = res_5818;
+
+      sum_5813 = sum_tmp_5862;
+    }
+    sum_5812 = sum_5813;
+
+    float x_5819 = ((__global float *) a0s_mem_5828)[gtid_5615 *
+                                                     (b_5475 *
+                                                      b_5474) +
+                                                     j_5811 *
+                                                     b_5475 +
+                                                     gtid_5616];
+    float lw_val_5820 = x_5819 - sum_5812;
+
+    ((__global float *) mem_5831)[phys_tid_5617 + j_5811 *
+                                  (num_groups_5804 *
+                                   segmap_group_sizze_5803)] =
+      lw_val_5820;
+  }
+#+END_SRC
+
+We can see that the loop is essentially the same as the hand-written one: each
+thread computes the values for its column in a loop. However, we also see that
+this version is using global memory, and of course there's also the two
+transmutes before and after the main loop. Futhark doesn't know that copying the
+entire matrix to local memory would speed things up. Inserting a single ~let a1
+= copy a1 in~ between the two ~map~s would not help, as Futhark would recognize
+it as an unnecessary copy and optimize it away. We need to trick Futhark into
+copying the matrix into local memory.
+
+** Improving the implementation
+
+We want to use local memory to process the matrices ~lud_perimeter_lower~ gets
+as input, in other words, we want to exploit intra-group parallelism. Each group
+should work on a matrix in the array of matrices. Each thread in a group should
+copy a part of the necessary matrix to local memory, and then when the whole
+matrix has been copied, the threads should start actually computing the dot
+products.
+
+Our initial implementation looks like this:
+
+#+BEGIN_SRC futhark
+let main [m][b] (diag: [b][b]f32) (mats: *[m][b][b]f32): *[m][b][b]f32 =
+  map (\mat: [b][b]f32 ->
+         let mat = copy mat
+         in loop mat for im1 < b-1 do
+           let i = im1 + 1
+           let row_sums = loop row_sums = replicate b 0 for j < i do
+                            map2 (\sum el -> sum + diag[i,j] * el) row_sums mat[j]
+           let row = map2 (-) mat[i] row_sums
+           let mat[i] = row
+           in mat
+      ) mats
+#+END_SRC
+
+We'll note some key differences from the previous function:
+
+  1. There is no transpose at the beginning and end of the function.
+  2. After mapping over the matrices in ~mats~, we copy ~mat~ to try and force
+     it into local memory (and to be able to update directly in it).
+  3. Instead of mapping over each row (or rather, transposed column) in the
+     function, we loop over the rows and let each thread compute the sum of the
+     cells above each cell in that row multiplied with the appropriate diagonal
+     value. In essence, we've interchanged the loop and the inner-most map.
+
+In all, the resulting function is semantically equivalent to the previous one,
+but we're hoping that this new function is able to take advantage of intra-group
+parallelism. So, what does the generated kernel look like?
+
+#+BEGIN_SRC opencl
+for (int32_t im1_5761 = 0; im1_5761 < upper_bound_5640; im1_5761++) {
+    int32_t i_5762 = 1 + im1_5761;
+
+    ((__local float *) double_buffer_mem_6291)[local_tid_6341] = ((__global
+                                                                       float *) mem_6187)[local_tid_6341];
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int32_t j_5765 = 0; j_5765 < i_5762; j_5765++) {
+       float x_5767 = ((__global float *) diag_mem_6183)[i_5762 * b_5613 +
+                                                              j_5765];
+       int32_t gtid_5680 = local_tid_6341;
+       int32_t phys_tid_5681;
+
+       phys_tid_5681 = local_tid_6341;
+       if (slt32(gtid_5680, b_5612)) {
+           float x_5769 = ((__local
+                            float *) double_buffer_mem_6291)[gtid_5680];
+           float x_5770 = ((__local float *) mem_6197)[j_5765 * b_5612 +
+                                                       gtid_5680];
+           float y_5771 = x_5767 * x_5770;
+           float res_5772 = x_5769 + y_5771;
+
+           ((__local float *) mem_6206)[gtid_5680] = res_5772;
+       }
+       barrier(CLK_LOCAL_MEM_FENCE);
+       ((__local float *) double_buffer_mem_6291)[local_tid_6341] =
+           ((__local float *) mem_6206)[local_tid_6341];
+       barrier(CLK_LOCAL_MEM_FENCE);
+   }
+
+   int32_t gtid_5686 = local_tid_6341;
+   int32_t phys_tid_5687;
+
+   phys_tid_5687 = local_tid_6341;
+   if (slt32(gtid_5686, b_5612)) {
+       float x_5775 = ((__local float *) mem_6197)[i_5762 * b_5612 +
+                                                   gtid_5686];
+       float x_5776 = ((__local
+                        float *) double_buffer_mem_6291)[gtid_5686];
+       float res_5777 = x_5775 - x_5776;
+
+       if ((sle32(0, i_5762) && slt32(i_5762, b_5612)) && (sle32(0,
+                                                                 gtid_5686) &&
+                                                           slt32(gtid_5686,
+                                                                 b_5612))) {
+           ((__local float *) mem_6197)[i_5762 * b_5612 + gtid_5686] =
+               res_5777;
+       }
+   }
+   barrier(CLK_LOCAL_MEM_FENCE);
+}
+#+END_SRC
+
+That's a big chunk of code, but essentially what is happing is what we want: the
+matrix has been copied into local memory and the computations inside the nested
+for loop all touch only local memory. There are still some global memory
+accesses left, for ~diag~ and for ~mem_6187~, which I'm guessing is ~row_sums~.
+How does the performance compare to our old implementation?
+
+| Input size of mats |                     old |               local_mat |
+|--------------------+-------------------------+-------------------------|
+|                    |                     <r> |                     <r> |
+|          128x16x16 | 30.8 \mu{}s (RSD: 0.05) | 53.0 \mu{}s (RSD: 0.08) |
+|            128x8x8 | 23.1 \mu{}s (RSD: 0.14) | 36.3 \mu{}s (RSD: 0.09) |
+|           32x16x16 | 28.6 \mu{}s (RSD: 0.04) | 50.1 \mu{}s (RSD: 0.07) |
+
+As we can see, the code is unfortunately not any faster than the old one. Our
+initial guess is that this is due to ~diag~ and ~mem_6187~ still being global.
+Unfortunately, simply copying ~diag~ with a ~let diag = copy diag~ will get
+optimized away, and the resulting kernel will look the same as before.
+
+* ~lud_diagonal~
+
+~lud_perimeter_lower~ looks a lot like ~lud_perimeter_upper~, so we weren't able
+to get any speed improvements there, but we were able to get some speedup in the
+~lud_diagonal~ function. Here's the old version:
+
+#+BEGIN_SRC futhark
+let main [b] (a: [b][b]f32): *[b][b]f32 =
+    let a_cols = copy(transpose(a)) in
+    let b2 = 2*b in
+    let a_rc = map (\ (i: i32): [b2]f32  ->
+                        map (\ (j: i32): f32  ->
+                                if j < b
+                                then unsafe a[i,j  ]
+                                else unsafe a_cols[i,j-b]
+                           ) (iota(b2) )
+                  ) (iota(b) )
+    let a_rc = loop a_rc for i < b do
+        let row_col =
+            map (\ (j: i32): f32  ->
+                    if j < b
+                    then
+                        if j < i then 0.0f32 else
+                        let sum = loop sum=0.0f32 for k < i do
+                            sum + a_rc[k,i+b]*a_rc[k,j]
+                        in  a_rc[i,j]-sum
+                    else
+                        let j = j - b in
+                        if j < (i+1) then 0.0f32 else
+                        let aii = loop aii=a_rc[i,i] for k < i do
+                            aii - (a_rc[k,i+b]*a_rc[k,i])
+                        in
+                        let sum = loop sum=0.0f32 for k < i do
+                            sum + a_rc[k,j+b]*a_rc[k,i]
+                        in  (a_rc[i,j+b]-sum) / aii
+               ) (iota(b2) )
+        in
+        let a_rc[i] = row_col in
+        a_rc
+    in map (\ (i: i32): [b]f32  ->
+            map (\ (j: i32): f32  ->
+                    if (i <= j) then a_rc[i,j] else a_rc[j,i+b]
+               ) (iota(b) )
+          ) (iota(b) )
+#+END_SRC
+
+and here is the updated (and much simpler version):
+
+#+BEGIN_SRC futhark
+let dotprod [n] (a: [n]f32) (b: [n]f32): f32 =
+  map2 (*) a b
+       |> reduce (+) 0
+
+let lud_diagonal [b] (a: *[b][b]f32): *[b][b]f32 =
+  map2 (\x mat ->
+          let mat = copy mat
+          in loop mat for i < b-1 do
+             let col = map (\j -> if j > i then
+                                    unsafe (mat[j,i] - (dotprod mat[j,:i] mat[:i,i])) / mat[i,i]
+                                  else
+                                    mat[j,i])
+                           (iota b)
+             let mat[:,i] = col
+
+             let row = map (\j -> if j > i then
+                                    mat[i+1, j] - (dotprod mat[:i+1, j] mat[i+1, :i+1])
+                                  else
+                                    mat[i+1, j])
+                           (iota b)
+             let mat[i+1] = row
+             in mat
+       ) (iota (opaque 1)) [a]
+       |> head
+#+END_SRC
+
+You'll notice that we have to use the outer map trick to force Futhark to use
+incremental flattening and to force it to copy ~mat~ to local memory. We have
+also introduced a new helper function ~dotprod~, which allows us to be a bit
+more clear about what we're doing (taking the dot product) without sacrificing
+any performance.
+
+| Input size of mats |                        old |                        new | Difference |
+|--------------------+----------------------------+----------------------------+------------|
+|                    |                        <r> |                        <r> |            |
+|              16x16 |   292.6 \mu{}s (RSD: 0.12) |   142.4 \mu{}s (RSD: 0.10) |    -51.33% |
+|              64x64 |   517.9 \mu{}s (RSD: 0.11) |   215.8 \mu{}s (RSD: 0.03) |    -58.38% |
+|            256x256 |  2167.6 \mu{}s (RSD: 0.14) |  1260.8 \mu{}s (RSD: 0.03) |    -41.83% |
+|            512x512 |  4181.1 \mu{}s (RSD: 0.12) |  2692.2 \mu{}s (RSD: 0.04) |    -35.61% |
+|          2048x2048 | 20156.6 \mu{}s (RSD: 0.12) | 19300.5 \mu{}s (RSD: 0.09) |     -4.24% |
+
+As we can see, there is a great speedup in the smaller input sizes, but it would
+seem like we run out of local memory when trying to handle the big inputs.
+
+I have submitted the changed lud-diagonal as a PR to futhark-benchmarks [[https://github.com/diku-dk/futhark-benchmarks/pull/11][here]].
+Unfortunately, it seems like =lud= is still an order of magnitude slower than
+the Rodinia implementation. This seems a bit extreme, so at some point I'd like
+to investigate this benchmark a bit further.
+
+* Footnotes
+
+[fn:1] I've written a simple [[file:rodinia_3.1-lud-benchmark-timing.patch][patch]] to make the timing behavior more consistent
+with Futhark's.
