@@ -1,0 +1,69 @@
+#+TITLE: Let's build a database - pdb part 0
+#+DATE: <2020-01-15 Wed>
+
+Let me start by saying that I'm not especially knowledgeable when it comes to
+databases. PostgreSQL is by far the database I have the most experience with,
+but most of the applications I've worked on have been fairly simple. Some
+triggers here, role-based authentication and row-level security there (via
+[[https://www.graphile.org/][PostGraphile]], which has been a pleasure to work with), a bit of custom data
+types and enums, but that's about it. I've never had to optimize for billions of
+rows in performance-critical applications and I don't know anything about how
+PostgreSQL (or any other database for that matter) works under the hood.
+
+That being said, I'm dissatisfied with the state of relational databases (or, I
+guess, at least with PostgreSQL, which seems to be the leader at the moment). I
+have three main areas of complaints: Schema migration, query language and
+script/program validation.
+
+* Schema management, migration and versioning
+
+In most contemporary SQL-like databases, managing schema migrations is left as
+an exercise for the user. Myriad tools attempt to solve migration for users, but
+common to most is that they're external to the database. Since they are external
+the user can bypass them, alter things directly in the database and suddenly the
+tool is worthless. There is also no guarantee that a schema migration is
+bi-directional, or alternately assert that a given migration will render the
+database backward-incompatible.
+
+I am interested in exploring whether a database system with an integrated system
+for handling schema migrations could provide better guarantees and ease of use.
+For instance, could we use a form of semantic versioning for the database
+schema? Non-breaking changes could have forward- and backward migrations
+attached that are guaranteed to be isomorphic. Users/applications could
+automatically interface with older versions of the database using those
+migrations to convert their data to the appropriate formats. Similarly, breaking
+changes, meaning changes that lose information, or where there is no
+bidirectionality, could be automatically detected and the schema could be
+versioned accordingly.
+
+* Improving the query language
+
+SQL has the staying power that it has because it is very flexible, powerful and
+well thought out. Depite that, I believe there are areas that could be improved,
+especially considering the developments that have happened in programming
+language theory since SQL was originally developed. For instance, why are there
+no algebraic data types? Where are the higher order functions? Why are SQL
+scripts not type validated in full before attempting to run it?
+
+It also seems strange to me that the language used to manipulate data is the
+same as the language used to manipulate the database schema. Continuing from the
+discussion about schema management, perhaps we would be better suited if those
+two languages were separate? It seems strange that normal programs should be
+allowed (or even have the option to) change the underlying database schema when
+all that most database applications need is simple CRUD queries.
+
+* Validating programs against the database schema
+
+Whether you're writing database scripts in pure SQL or interfacing with the
+database through other programming languages, it's always a very brittle
+experience. There is no way to know that the program you are running is using
+the correct database schema for its interactions. I believe it would be
+beneficial to be able to validate your assumptions about the database layout
+before you go on with your database queries.
+
+* pdb
+
+So let's try to explore some of these issues and possible solutions by building
+our own database. Along the way, we're hopefully going to learn a bit about how
+databases actually work. For now I'm calling the database /pdb/, because I have
+no better ideas. Suggestions are welcome.

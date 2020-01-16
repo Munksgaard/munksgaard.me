@@ -10,6 +10,9 @@ functional programming language Futhark. I am a MSc in Computer Science from the
 University of Copenhagen (2015). I like programming languages, programming
 language theory, algorithms, concurrency and parallelism.
 
+* pdb
+ - [[file:pdb/lets-build-a-database.org][Let's build a database]]
+
 * Random unfinished projects
 
  - [[file:30days/smlfuck.org][smlfuck]]
