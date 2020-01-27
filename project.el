@@ -37,7 +37,8 @@
 
         ("munksgaard.me-static"
          :base-directory "./"
-         :base-extension "css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf"
+         :base-extension "css\\|js\\|png\\|jpg\\|gif\\|mp3\\|ogg\\|patch"
+         :recursive t
          :publishing-directory "/ssh:munksgaard.me|sudo:www-data:/var/www/munksgaard.me"
          :publishing-function org-publish-attachment
          )
