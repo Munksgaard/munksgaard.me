@@ -1,0 +1,559 @@
+#+TITLE: Create, Insert and Select - pdb part 1
+#+DATE: <2020-01-30 Thu>
+#+AUTHOR: Philip Munksgaard
+#+EMAIL: philip@munksgaard.me
+
+In the [[file:lets-build-a-database.org][previous]] post, I outlined my frustrations with current relational
+databases and promised to describe my adventures trying to create my own
+database. This post will be the first in a series of posts, with the goal of
+writing a usable database, albeit minimalistic, database. The database will be
+written in Rust and you're encouraged to follow along, but I will assume that
+you are moderately familiar with Rust.
+
+You can always see the progress in the repository [[https://github.com/Munksgaard/pdb][here]]. This document is based
+on the code at commit version [[https://github.com/Munksgaard/pdb/tree/c47e2b0e0c8bdf9ef9b5e6980f43bc1ffea6bb62][c47e2b0e0c8bdf9ef9b5e6980f43bc1ffea6bb62]].
+
+* The pdb query language
+
+Since we're creating a database from scratch we get to decide what the query
+language will look like. For the pdb query language I'm going to lean upon SQL
+for the general feel, but I won't be afraid to depart from that style when
+I feel like it.
+
+The first instance of the language (and the database) will support basic types
+consisting of integers, booleans, tuples and records. I might demote tuples to
+syntactic sugar for records at some point, but for now it doesn't hurt to have
+them as separate entities. Here's what a typical session might look like:
+
+#+BEGIN_EXAMPLE
+>> create table foo Int
+Created
+>> insert 42 into foo
+Inserted 1
+>> insert 43 into foo
+Inserted 1
+>> select from foo
+[Int(42), Int(43)]
+>> create table bar (Int, Bool)
+Created
+>> insert (100, true) into bar
+Inserted 1
+>> select from bar
+[Tuple([Int(100), Bool(true)])]
+>> create table baz ()
+Created
+>> insert () into baz
+Inserted 1
+>> insert () into baz
+Inserted 1
+>> select from baz
+[Unit, Unit]
+>> create table qux { x : Int, y : Int }
+Created
+>> insert { y = 2, x = 1 } into qux
+Inserted 1
+>> select from qux
+[Record([("x", Int(1)), ("y", Int(2))])]
+#+END_EXAMPLE
+
+Right off the bat you'll notice some differences from traditional SQL. Most
+glaringly is probably the fact that in pdb, we don't have any columns by
+default. A table can just as easily consist of a number of ~()~, or /unit/s, or
+a simple list of integers. To mimic traditional tables with named columns, we
+can use records, which allow us to name each field.
+
+* Getting started
+
+We're going to create a new project using ~cargo new pdb~. Our first
+dependency is going to be =pest=, a parser expression grammar library for
+rust. Add the following to your =Cargo.toml=:
+
+#+BEGIN_SRC toml
+...
+
+[dependencies]
+pest = "2.1.1"n
+pest_derive = "2.1.0"
+#+END_SRC
+
+* Parsing is (not) a pest
+
+With the =pest= library, we can express the grammar of our language using a
+parsing expression grammar. We'll quickly go over each line to see how it works:
+
+#+BEGIN_SRC
+WHITESPACE = _{ " " | "\n" }
+#+END_SRC
+
+First, we declare what constitutes whitespace in our language. =pest= uses the
+special ~WHITESPACE~ rule to control what kind of whitespace is allowed between
+terms. To start, we allow spaces and newlines.
+
+#+BEGIN_SRC
+identifier = @{ 'a'..'z' ~ ASCII_ALPHANUMERIC* }
+
+tyident = @{ 'A'..'Z' ~ ASCII_ALPHANUMERIC* }
+#+END_SRC
+
+Then we make an ~identifier~ rule and a ~tyident~ rule for the various
+identifiers we're going to use. We specify that regular expression identifiers
+should start with a lowercase letter, and type identifiers should start with an
+uppercase letter, similar to how identifiers are used in Haskell and similar
+ML-family languages. It also means that we can easily distinguish between the
+two kinds of identifiers.
+
+#+BEGIN_SRC
+unit = { "()" }
+
+tytuple = { "(" ~ ty ~ ("," ~ ty)+ ~ ","? ~ ")" }
+
+tyrecord = { "{" ~ identifier ~ ":" ~ ty ~ ("," ~ identifier ~ ":" ~ ty)* ~ ","? ~ "}" }
+
+ty = { unit | tytuple | tyrecord | tyident }
+#+END_SRC
+
+Next, the ~unit~ rule is used for both the unit type and the unit value. Then
+follows the rules for tuple and record types, and finally the ~ty~ rule for
+general types. You'll notice that I'm allowing trailing commans in both the
+tuple and record types,  which I like because it means adding or removing fields
+result in single-line diffs.
+
+#+BEGIN_SRC
+int = @{
+    "-"?
+    ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*)
+}
+
+bool = { "true" | "false" }
+
+tuple = { "(" ~ expr ~ ("," ~ expr)+ ~ ","? ~ ")" }
+
+record = { "{" ~ identifier ~ "=" ~ expr ~ ("," ~ identifier ~ "=" ~ expr)* ~ ","? ~ "}" }
+
+expr = { unit | tuple | record | int | bool }
+#+END_SRC
+
+Then we have the expressions allowed, which consists of integeres, booleans,
+tuples, and records. You'll note that I also allow trailing commas in the
+relevant expressions here.
+
+#+BEGIN_SRC
+insert = { "insert" ~ expr ~ "into" ~ identifier }
+
+select = { "select" ~ "from" ~ identifier }
+
+create = { "create" ~ "table" ~ identifier ~ ty }
+
+statement = _{ SOI ~ (create | insert | select) ~ EOI }
+#+END_SRC
+
+Finally, the statements we allow are quite simple: ~insert~, ~select~, and
+~create~. You'll notice that the select statement is /very/ primitive. For
+instance, there's no filtering, by either row or column, but we'll add those
+later.
+
+That's it for the grammar of the language, now we need to turn the parsed
+statements into an AST.
+
+* Turning the Grammar into an AST
+
+Here's the AST structures:
+
+#+BEGIN_SRC rust
+pub type Ident = String;
+
+#[derive(Debug, PartialEq)]
+pub enum Ty {
+    Int,
+    Bool,
+    Tuple(Vec<Ty>),
+    Unit,
+    Record(Vec<(Ident, Ty)>),
+}
+
+#[derive(Debug, PartialEq)]
+pub struct TableDefinition {
+    pub ty: Ty,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Expr {
+    Int(i64),
+    Bool(bool),
+    Tuple(Vec<Expr>),
+    Unit,
+    Record(Vec<(Ident, Expr)>),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Statement {
+    Create(Ident, TableDefinition),
+    Insert(Ident, Expr),
+    Select(Ident),
+}
+#+END_SRC
+
+We'll note that we've collapsed the ~identifier~ and ~ident~ from pest into an
+~Ident~ struct, which is simply a string. Apart from that, these declarations
+correspond more or less directly to their pest counterparts.
+
+Parsing using the =pest= parser library takes some getting used to, but once you
+get the hang of it, you can quickly turn a grammar into a robust parser with
+builtin error messages.
+
+#+BEGIN_SRC rust
+use pest::error::Error;
+use pest::iterators::{Pair, Pairs};
+use pest::Parser as _;
+
+#[derive(Parser)]
+#[grammar = "pdb.pest"]
+pub struct Parser;
+#+END_SRC
+
+First, we import the necessary structs from ~pest~ and then we use the ~grammar~
+annotation to create a ~Parser~ struct from our grammar definition.
+
+#+BEGIN_SRC rust
+fn parse_tyrecord(mut pairs: Pairs<Rule>) -> Result<Ty, Error<Rule>> {
+    let mut xs = Vec::new();
+
+    while let Some(ident) = pairs.next() {
+        let ty = parse_ty(pairs.next().unwrap())?;
+        xs.push((ident.as_str().to_owned(), ty));
+    }
+
+    xs.sort_by(|(x, _), (y, _)| x.cmp(y));
+
+    Ok(Ty::Record(xs))
+}
+#+END_SRC
+
+~Pairs<Rule>~ is an iterator over ~Pair<Rule>~, which is a matching rule and
+everything inside. For instance, the string ~true~ will match a ~pair~ with the
+rule ~bool~, span from the start of the string to the end, and no inner pairs.
+The first parsing function ~parse_tyrecord~ parses the contents of a record type
+(ie. ~{ x : Int, y : Bool }~). So, the values inside ~pairs~ will alternate
+between an identifier and a type, with a guaranteed even number of values in
+total, because that is the only thing our grammar allows. Hence, it is safe to
+use ~unwrap~ to get the type ~Pair~ when we have found an identifier.
+
+You'll note that we sort the vector by the identifier names, because we want to
+allow ~{ x : Int, y : Int }~ and ~{ y : Int, x : Int }~ to represent the same
+thing. You'll also note that we're not checking for multiple declarations of the
+same identifier, but that is something that we could reasonably add in the
+future.
+
+#+BEGIN_SRC rust
+fn parse_ty(pair: Pair<Rule>) -> Result<Ty, Error<Rule>> {
+    match pair.as_rule() {
+        Rule::tyident => match pair.as_str() {
+            "Int" => Ok(Ty::Int),
+            "Bool" => Ok(Ty::Bool),
+            x => Err(Error::new_from_span(
+                pest::error::ErrorVariant::CustomError {
+                    message: format!("Invalid type {}", x),
+                },
+                pair.as_span(),
+            )),
+        },
+        Rule::tytuple => Ok(Ty::Tuple(
+            pair.into_inner()
+                .map(|x| parse_ty(x.into_inner().next().unwrap()))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        Rule::unit => Ok(Ty::Unit),
+        Rule::tyrecord => parse_tyrecord(pair.into_inner()),
+        r => Err(Error::new_from_span(
+            pest::error::ErrorVariant::CustomError {
+                message: format!(
+                    "Unexpected rule {:?}, expected tyindent, tyrecord, unit or tytuple",
+                    r
+                ),
+            },
+            pair.as_span(),
+        )),
+    }
+}
+#+END_SRC
+
+~parse_ty~ takes a ~Pair<Rule>~ instead of a ~Pairs~, simply because we know
+that a type matches a single rule. We then match on the rule inside the type
+andproduce the corresponding ~Ty~. Parsing expressions is similar, and after
+than we just need to parse the different kinds of statements. Here is the rest
+of the parsing code:
+
+#+BEGIN_SRC rust
+
+fn parse_record(mut pairs: Pairs<Rule>) -> Result<Expr, Error<Rule>> {
+    let mut xs = Vec::new();
+
+    while let Some(ident) = pairs.next() {
+        let expr = parse_expr(pairs.next().unwrap().into_inner().next().unwrap())?;
+        xs.push((ident.as_str().to_owned(), expr));
+    }
+
+    xs.sort_by(|(x, _), (y, _)| x.cmp(y));
+
+    Ok(Expr::Record(xs))
+}
+
+fn parse_expr(expr: Pair<Rule>) -> Result<Expr, Error<Rule>> {
+    match expr.as_rule() {
+        Rule::int => Ok(Expr::Int(expr.as_str().parse().unwrap())),
+        Rule::bool => Ok(Expr::Bool(expr.as_str().parse().unwrap())),
+        Rule::tuple => Ok(Expr::Tuple(
+            expr.into_inner()
+                .map(|x| parse_expr(x.into_inner().next().unwrap()))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        Rule::unit => Ok(Expr::Unit),
+        Rule::record => parse_record(expr.into_inner()),
+        r => Err(Error::new_from_span(
+            pest::error::ErrorVariant::CustomError {
+                message: format!("Unexpected rule {:?}, expected expr", r),
+            },
+            expr.as_span(),
+        )),
+    }
+}
+
+pub fn parse_select(mut pairs: Pairs<Rule>) -> Result<Statement, Error<Rule>> {
+    let ident = pairs.next().unwrap().as_str();
+
+    Ok(Statement::Select(ident.to_string()))
+}
+
+pub fn parse_insert(mut pairs: Pairs<Rule>) -> Result<Statement, Error<Rule>> {
+    let expr = parse_expr(pairs.next().unwrap().into_inner().next().unwrap())?;
+    let ident = pairs.next().unwrap().as_str();
+
+    Ok(Statement::Insert(ident.to_string(), expr))
+}
+
+pub fn parse_create(mut pairs: Pairs<Rule>) -> Result<Statement, Error<Rule>> {
+    let ident = pairs.next().unwrap().as_str();
+    let ty = parse_ty(pairs.next().unwrap().into_inner().next().unwrap())?;
+
+    Ok(Statement::Create(
+        ident.to_string(),
+        TableDefinition { ty: ty },
+    ))
+}
+
+fn parse_statement(pair: Pair<Rule>) -> Result<Statement, Error<Rule>> {
+    match pair.as_rule() {
+        Rule::create => Ok(parse_create(pair.into_inner())?),
+        Rule::select => Ok(parse_select(pair.into_inner())?),
+        Rule::insert => Ok(parse_insert(pair.into_inner())?),
+        _ => Err(Error::new_from_span(
+            pest::error::ErrorVariant::CustomError {
+                message: format!("Unexpected rule {:?}, expected statement", pair),
+            },
+            pair.as_span(),
+        )),
+    }
+}
+
+pub fn parse(input: &str) -> Result<Statement, Error<Rule>> {
+    let statement = Parser::parse(Rule::statement, input)?.next().unwrap();
+
+    parse_statement(statement)
+}
+#+END_SRC
+
+With that, our parser is done.
+
+* Objects (not the Java kind)
+
+Eventually, we'd like to add other kinds of expressions (addition, sums, and so
+on), but we don't want store symbols like that in our tables, so we need to be
+able to evaluate expressions into something that we can store on disk. We'll
+call the evaluated expressions ~Object~s, and this is the definition we'll use:
+
+#+BEGIN_SRC rust
+#[derive(Debug, PartialEq)]
+pub enum Object {
+    Int(i64),
+    Bool(bool),
+    Tuple(Vec<Object>),
+    Unit,
+    Record(Vec<(Ident, Object)>),
+}
+
+impl fmt::Display for Object {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Object::Int(i) => write!(f, "{}", i),
+            Object::Bool(b) => write!(f, "{}", b),
+            Object::Tuple(objs) => {
+                let mut objs = objs.iter();
+                write!(f, "(")?;
+
+                if let Some(obj) = objs.next() {
+                    write!(f, "{}", obj)?;
+                }
+
+                for obj in objs {
+                    write!(f, ", {}", obj)?;
+                }
+
+                write!(f, ")")
+            }
+            Object::Unit => write!(f, "()"),
+            Object::Record(pairs) => {
+                let mut pairs = pairs.iter();
+                write!(f, "{{")?;
+
+                if let Some((ident, obj)) = pairs.next() {
+                    write!(f, "{} = {}", ident, obj)?;
+                }
+
+                for (ident, obj) in pairs {
+                    write!(f, ", {} = {}", ident, obj)?;
+                }
+
+                write!(f, "}}")
+            }
+        }
+    }
+}
+#+END_SRC
+
+We have also added an implementation of ~Display~, so that our REPL can show the
+result of queries in a nice manner.
+
+Since we don't have any complicated expressions yet, evaluating is a simple
+manner of translating an ~Expr~ into the corresponding ~Object~.
+
+#+BEGIN_SRC rust
+pub fn eval(expr: Expr) -> Object {
+    match expr {
+        Expr::Int(i) => Object::Int(i),
+        Expr::Bool(b) => Object::Bool(b),
+        Expr::Tuple(exprs) => Object::Tuple(exprs.into_iter().map(eval).collect()),
+        Expr::Unit => Object::Unit,
+        Expr::Record(xs) => Object::Record(
+            xs.into_iter()
+                .map(|(ident, obj)| (ident, eval(obj)))
+                .collect(),
+        ),
+    }
+}
+#+END_SRC
+
+* Unification and a working REPL
+
+Before we can write our REPL, we also need a way to ensure that an expression
+matches the type of the table it's being inserted in. Thankfully, this isn't
+very complicated, since our language is so simple:
+
+#+BEGIN_SRC rust
+pub fn matches_type(expr: &Expr, ty: &Ty) -> bool {
+    match (expr, ty) {
+        (Expr::Int(_), Ty::Int) => true,
+        (Expr::Bool(_), Ty::Bool) => true,
+        (Expr::Tuple(exprs), Ty::Tuple(tys)) => exprs
+            .iter()
+            .zip(tys.iter())
+            .all(|(x, y)| matches_type(x, y)),
+        (Expr::Unit, Ty::Unit) => true,
+        (Expr::Record(expr_pairs), Ty::Record(ty_pairs)) => expr_pairs
+            .iter()
+            .zip(ty_pairs.iter())
+            .all(|((exprident, expr), (tyident, ty))| {
+                exprident == tyident && matches_type(expr, ty)
+            }),
+        _ => false,
+    }
+}
+#+END_SRC
+
+We'll need to expand this using proper Hindley-Milner unification at some point,
+but this will do for now.
+
+That was the last piece we needed in order to be able to create a REPL! For now,
+tables only exist in memory, and consist of a list of ~Object~ values. We also
+have no filtering or anything, but we support arbitrarily complex table types,
+including records and tuples. Here is the code:
+
+#+BEGIN_SRC rust
+const PROMPT: &[u8; 3] = b">> ";
+
+pub fn start<R, W>(reader: &mut R, writer: &mut W) -> Result<(), Box<dyn std::error::Error>>
+where
+    R: BufRead,
+    W: Write,
+{
+    let mut tables: Vec<(Ident, TableDefinition, Vec<Object>)> = Vec::new();
+
+    loop {
+        writer.write_all(PROMPT)?;
+        writer.flush()?;
+
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+
+        if &line == "" {
+            writer.write_all(b"\n")?;
+            writer.flush()?;
+            return Ok(());
+        }
+
+        match parse(&line) {
+            Ok(ast) => match ast {
+                Statement::Create(ident, def) => {
+                    tables.push((ident, def, Vec::new()));
+                    writer.write_all(b"Created\n")?;
+                    writer.flush()?;
+                }
+                Statement::Insert(ident, expr) => {
+                    if let Some((_, def, objs)) =
+                        tables.iter_mut().find(|(ident2, _, _)| ident2 == &ident)
+                    {
+                        if matches_type(&expr, &def.ty) {
+                            let result = eval(expr);
+                            objs.push(result);
+                            writer.write_all(b"Inserted 1\n")?;
+                        } else {
+                            writer.write_all(
+                                format!(
+                                    "Could not insert {:?} into table {:?} with definition {:?}\n",
+                                    expr, ident, &def.ty
+                                )
+                                .as_bytes(),
+                            )?;
+                        }
+                    } else {
+                        writer.write_all(b"No such table\n")?;
+                    }
+                    writer.flush()?;
+                }
+                Statement::Select(ident) => {
+                    if let Some((_, _, objs)) =
+                        tables.iter().find(|(ident2, _, _)| ident2 == &ident)
+                    {
+                        writer.write_all(format!("{:?}\n", objs).as_bytes())?;
+                    } else {
+                        writer.write_all(b"No such table\n")?;
+                    }
+                    writer.flush()?;
+                }
+            },
+            Err(e) => {
+                writer.write_all(format!("No parse: {}\n", e).as_bytes())?;
+                writer.flush()?;
+            }
+        }
+    }
+}
+#+END_SRC
+
+That's it for this installment. There are still many things we'd like to do with
+our database, including persisting to disk, filtering and more expressions, but
+I think of this as the minimum viable product, and it is a good standpoint from
+which to expand our database.
+
+If you've got any comments or suggestions, feel free to contact me by email.
+Bugs and pull requests are welcome in the repository at
+https://github.com/Munksgaard/pdb.
