@@ -1,7 +1,5 @@
 #+TITLE: Create, Insert and Select - pdb part 1
-#+DATE: <2020-01-30 Thu>
-#+AUTHOR: Philip Munksgaard
-#+EMAIL: philip@munksgaard.me
+#+DATE: <2020-02-05 Thu>
 
 In the [[file:lets-build-a-database.org][previous]] post, I outlined my frustrations with current relational
 databases and promised to describe my adventures trying to create my own

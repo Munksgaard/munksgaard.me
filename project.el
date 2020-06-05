@@ -32,7 +32,6 @@
          :with-toc nil
          :html-postamble t
          :html-doctype "xhtml-strict"
-         :exclude "*~"
          )
 
         ("munksgaard.me-static"
