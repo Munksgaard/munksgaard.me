@@ -1,0 +1,532 @@
+#+TITLE: Existentialized index functions in loops
+#+DATE: <2020-06-05 Fri>
+
+* The Purpose
+
+Over the course of a few weeks, I've been working on an optimization in the
+Futhark compiler which will allow us to eliminate extra copies in a few specific
+cases. For instance, the following piece of code would result in a new copy at
+the end of each loop iteration, in addition to a copy at the loop
+initialization:
+
+#+begin_src futhark
+let main [n] (a: [n]i32): i32 =
+  let b = loop xs = a[1:] for i < n / 2 - 2 do
+          xs[i:]    -- This will result in a copy
+  in reduce (+) 0 b
+#+end_src
+
+If, instead of performing a copy at the end of each loop iteration, we could
+existentialize the index function of the array returned by the loop, returning
+the offset in addition to the memory location and result, we could avoid those
+copies.
+
+* How does it work?
+
+Here, /existentializing/ the index function means to replace parts of it with
+free variables, that can then be bound in the surrounding context.
+
+For instance, the array type annotation (including the index function) could look like this:
+
+#+begin_src
+[size]f32@@mem->{
+  base: [size];
+  contiguous: True;
+  LMADs: [{offset: orig + i;
+           strides: [0i32];
+           rotates: [0i32];
+           shape: [size_new];
+           permutation: [0];
+           monotonicity: [Inc]}]}
+#+end_src
+
+where ~size~, ~mem~, ~orig~, ~i~, and ~size_new~ are variables from the
+code. Existentializing the type would yield something like this:
+
+#+begin_src
+[?0]f32@@?5>{
+  base: [?1];
+  contiguous: True;
+  LMADs: [{offset: ?2;
+           strides: [?3];
+           rotates: [0i32];
+           shape: [?4];
+           permutation: [0];
+           monotonicity: [Inc]}]}
+#+end_src
+
+Now, in addition to returning the array itself (and perhaps the memory
+allocation), we return the values that was existentialized out of the type/index
+function. That way, by existentializing the index function of different arrays
+(like the ones returned in the loop initialization and the one returned at the
+end of the loop), we can make their index functions match, such that their types
+match. I've previously done the same thing in ~if~ expressions, existentializing
+the array index functions in different branches to avoid copies.
+
+There's one caveat here though, which is that the ~DoLoop~ construct in Futhark
+does not support existentialized index functions. So we have to generate new
+variables and insert them in the index function/type annotation so that we can
+instantiate the array before we can return it.
+
+* Benchmarks
+
+To benchmark our changes, we compare the performance of the futhark-benchmark
+benchmarks compiled with the compiler at commit
+~3fc8988b5dbcb53e1722ebc2429db56c693b6782~ (which is the commit just before our
+changes) and ~54a30308bf015cd455b5bd77fa5a0957c9897f79~ using
+~futhark-benchmarks~ at ~2babb70aa4987383635686af8c7e30a26ed45250~.
+
+Here are the commands and results:
+
+#+begin_src sh
+(cd futhark-benchmarks; git checkout 2babb70aa4987383635686af8c7e30a26ed45250)
+
+git checkout 3fc8988b5dbcb53e1722ebc2429db56c693b6782
+
+stack exec futhark -- bench \
+  --no-tuning \
+  --backend=opencl \
+  --json bench-master.json \
+  --exclude=no_opencl \
+  --ignore-files micro \
+  --ignore-files /lib/ \
+  futhark-benchmarks
+
+git checkout 54a30308bf015cd455b5bd77fa5a0957c9897f79
+
+stack exec futhark -- bench \
+  --no-tuning \
+  --backend=opencl \
+  --json bench-master.json \
+  --exclude=no_opencl \
+ --ignore-files micro \
+ --ignore-files /lib/ \
+  futhark-benchmarks
+
+tools/cmp-bench-json.py bench-master.json bench-existential-loop-6.json
+#+end_src
+
+#+begin_src
+futhark-benchmarks/accelerate/canny/canny.fut
+  data/lena512.in:                                                      0.99x
+  data/lena256.in:                                                      1.00x
+
+futhark-benchmarks/accelerate/crystal/crystal.fut
+  #0 ("200i32 30.0f32 5i32 1i32 1.0f32"):                               1.01x
+  #4 ("2000i32 30.0f32 50i32 1i32 1.0f32"):                             1.00x
+  #5 ("4000i32 30.0f32 50i32 1i32 1.0f32"):                             1.00x
+
+futhark-benchmarks/accelerate/fft/fft.fut
+  data/64x256.in:                                                       0.95x
+  data/128x512.in:                                                      0.97x
+  data/1024x1024.in:                                                    0.97x
+  data/512x512.in:                                                      1.03x
+  data/256x256.in:                                                      1.01x
+  data/128x128.in:                                                      0.95x
+
+futhark-benchmarks/accelerate/fluid/fluid.fut
+  benchmarking/medium.in:                                               1.05x
+
+futhark-benchmarks/accelerate/hashcat/hashcat.fut
+  rockyou.dataset:                                                      1.00x
+
+futhark-benchmarks/accelerate/kmeans/kmeans.fut
+  data/k5_n50000.in:                                                    1.11x
+  data/trivial.in:                                                      0.99x
+  data/k5_n200000.in:                                                   1.00x
+
+futhark-benchmarks/accelerate/mandelbrot/mandelbrot.fut
+  #1 ("1000i32 1000i32 -0.7f32 0.0f32 3.067f32 100i32 16...."):         1.02x
+  #3 ("4000i32 4000i32 -0.7f32 0.0f32 3.067f32 100i32 16...."):         1.00x
+  #2 ("2000i32 2000i32 -0.7f32 0.0f32 3.067f32 100i32 16...."):         0.99x
+  #0 ("800i32 600i32 -0.7f32 0.0f32 3.067f32 100i32 16.0f..."):         1.01x
+  #4 ("8000i32 8000i32 -0.7f32 0.0f32 3.067f32 100i32 16...."):         1.00x
+
+futhark-benchmarks/accelerate/nbody/nbody-bh.fut
+  data/10000-bodies.in:                                                 1.06x
+  data/100000-bodies.in:                                                0.96x
+  data/1000-bodies.in:                                                  0.94x
+
+futhark-benchmarks/accelerate/nbody/nbody.fut
+  data/10000-bodies.in:                                                 0.83x
+  data/100000-bodies.in:                                                0.95x
+  data/1000-bodies.in:                                                  0.47x
+
+futhark-benchmarks/accelerate/pagerank/pagerank.fut
+  data/small.in:                                                        1.00x
+  data/random_medium.in:                                                1.00x
+
+futhark-benchmarks/accelerate/ray/trace.fut
+  #0 ("800i32 600i32 100i32 50.0f32 -100.0f32 -700.0f32 1..."):         1.00x
+
+futhark-benchmarks/accelerate/smoothlife/smoothlife.fut
+  #1 ("256i32"):                                                        0.94x
+  #2 ("512i32"):                                                        1.00x
+  #3 ("1024i32"):                                                       0.95x
+  #0 ("128i32"):                                                        0.93x
+
+futhark-benchmarks/accelerate/tunnel/tunnel.fut
+  #1 ("10.0f32 1000i32 1000i32"):                                       1.01x
+  #4 ("10.0f32 8000i32 8000i32"):                                       1.00x
+  #0 ("10.0f32 800i32 600i32"):                                         0.98x
+  #2 ("10.0f32 2000i32 2000i32"):                                       1.00x
+  #3 ("10.0f32 4000i32 4000i32"):                                       1.00x
+
+futhark-benchmarks/finpar/LocVolCalib.fut
+  LocVolCalib-data/small.in:                                            1.01x
+  LocVolCalib-data/medium.in:                                           1.01x
+  LocVolCalib-data/large.in:                                            1.00x
+
+futhark-benchmarks/finpar/OptionPricing.fut
+  OptionPricing-data/medium.in:                                         1.00x
+  OptionPricing-data/small.in:                                          0.99x
+  OptionPricing-data/large.in:                                          1.00x
+
+futhark-benchmarks/jgf/crypt/crypt.fut
+  crypt-data/medium.in:                                                 0.97x
+
+futhark-benchmarks/jgf/crypt/keys.fut
+  crypt-data/userkey0.txt:                                              0.98x
+
+futhark-benchmarks/jgf/series/series.fut
+  data/1000000.in:                                                      1.00x
+  data/10000.in:                                                        1.00x
+  data/100000.in:                                                       1.00x
+
+futhark-benchmarks/misc/bfast/bfast-cloudy.fut
+  data/peru.in:                                                         1.02x
+  data/sahara-cloudy.in:                                                1.00x
+
+futhark-benchmarks/misc/bfast/bfast.fut
+  data/sahara.in:                                                       1.00x
+
+futhark-benchmarks/misc/heston/heston32.fut
+  data/1062_quotes.in:                                                  0.98x
+  data/10000_quotes.in:                                                 1.00x
+  data/100000_quotes.in:                                                1.00x
+
+futhark-benchmarks/misc/heston/heston64.fut
+  data/1062_quotes.in:                                                  1.00x
+  data/10000_quotes.in:                                                 1.00x
+  data/100000_quotes.in:                                                1.00x
+
+futhark-benchmarks/misc/knn-by-kdtree/buildKDtree.fut
+  valid-data/kdtree-ppl-32-m-2097152.in:                                1.03x
+
+futhark-benchmarks/misc/radix_sort/radix_sort_blelloch_benchmark.fut
+  data/radix_sort_100K.in:                                              1.07x
+  data/radix_sort_10K.in:                                               1.10x
+  data/radix_sort_1M.in:                                                0.97x
+
+futhark-benchmarks/misc/radix_sort/radix_sort_large.fut
+  data/radix_sort_100K.in:                                              1.39x
+  data/radix_sort_10K.in:                                               1.01x
+  data/radix_sort_1M.in:                                                1.01x
+
+futhark-benchmarks/parboil/histo/histo.fut
+  data/default.in:                                                      1.03x
+  data/large.in:                                                        1.00x
+
+futhark-benchmarks/parboil/mri-q/mri-q.fut
+  data/large.in:                                                        1.00x
+  data/small.in:                                                        1.01x
+
+futhark-benchmarks/parboil/sgemm/sgemm.fut
+  data/tiny.in:                                                         0.96x
+  data/small.in:                                                        1.06x
+  data/medium.in:                                                       1.01x
+
+futhark-benchmarks/parboil/stencil/stencil.fut
+  data/default.in:                                                      1.00x
+  data/small.in:                                                        1.03x
+
+futhark-benchmarks/parboil/tpacf/tpacf.fut
+  data/large.in:                                                        1.00x
+  data/small.in:                                                        1.00x
+  data/medium.in:                                                       1.00x
+
+futhark-benchmarks/pbbs/ray/ray.fut
+  data/angel.in:                                                        1.00x
+  data/dragon.in:                                                       1.00x
+  data/happy.in:                                                        1.00x
+
+futhark-benchmarks/rodinia/backprop/backprop.fut
+  data/small.in:                                                        0.99x
+  data/medium.in:                                                       1.00x
+
+futhark-benchmarks/rodinia/bfs/bfs_asympt_ok_but_slow.fut
+  data/64kn_32e-var-1-256-skew.in:                                      0.99x
+  data/512nodes_high_edge_variance.in:                                  1.08x
+  data/graph1MW_6.in:                                                   1.05x
+  data/4096nodes.in:                                                    1.12x
+
+futhark-benchmarks/rodinia/bfs/bfs_filt_padded_fused.fut
+  data/64kn_32e-var-1-256-skew.in:                                      0.93x
+  data/512nodes_high_edge_variance.in:                                  0.97x
+  data/graph1MW_6.in:                                                   0.99x
+  data/4096nodes.in:                                                    0.93x
+
+futhark-benchmarks/rodinia/bfs/bfs_heuristic.fut
+  data/64kn_32e-var-1-256-skew.in:                                      0.93x
+  data/512nodes_high_edge_variance.in:                                  0.93x
+  data/graph1MW_6.in:                                                   1.03x
+  data/4096nodes.in:                                                    0.98x
+
+futhark-benchmarks/rodinia/bfs/bfs_iter_work_ok.fut
+  data/64kn_32e-var-1-256-skew.in:                                      1.07x
+  data/512nodes_high_edge_variance.in:                                  1.29x
+  data/graph1MW_6.in:                                                   1.21x
+  data/4096nodes.in:                                                    1.50x
+
+futhark-benchmarks/rodinia/cfd/cfd.fut
+  data/fvcorr.domn.193K.toa:                                            1.01x
+  data/fvcorr.domn.097K.toa:                                            0.91x
+
+futhark-benchmarks/rodinia/hotspot/hotspot.fut
+  data/512.in:                                                          0.50x
+  data/1024.in:                                                         1.00x
+  data/64.in:                                                           1.06x
+
+futhark-benchmarks/rodinia/kmeans/kmeans.fut
+  data/kdd_cup.in:                                                      1.05x
+  data/100.in:                                                          0.99x
+  data/204800.in:                                                       1.00x
+
+futhark-benchmarks/rodinia/lavaMD/lavaMD.fut
+  data/3_boxes.in:                                                      1.00x
+  data/10_boxes.in:                                                     1.02x
+
+futhark-benchmarks/rodinia/lud/lud.fut
+  data/512.in:                                                          1.00x
+  data/64.in:                                                           0.99x
+  data/256.in:                                                          0.97x
+  data/16by16.in:                                                       1.01x
+  data/2048.in:                                                         0.98x
+
+futhark-benchmarks/rodinia/myocyte/myocyte.fut
+  data/small.in:                                                        1.02x
+  data/medium.in:                                                       1.00x
+
+futhark-benchmarks/rodinia/nn/nn.fut
+  data/medium.in:                                                       0.99x
+
+futhark-benchmarks/rodinia/nw/nw.fut
+  data/large.in:                                                        1.00x
+
+futhark-benchmarks/rodinia/particlefilter/particlefilter.fut
+  data/128_128_10_image_400000_particles.in:                            1.01x
+  data/128_128_10_image_10000_particles.in:                             1.00x
+
+futhark-benchmarks/rodinia/pathfinder/pathfinder.fut
+  data/medium.in:                                                       0.40x
+
+futhark-benchmarks/rodinia/srad/srad.fut
+  data/image.in:                                                        0.97x
+#+end_src
+
+* The good : ~bfs_iter_work_ok~
+
+The ~bfs_iter_work_ok~ benchmark from Rodinia is faster with my changes. By
+investigating the code using ~futhark dev --gpu~, we can see that we're exactly
+hitting the kinds of places we set out to: loops where the result is
+unnecessarily linearized. Instead of having to linearize the resulting arrays at
+the end of each loop, we existentialize the index function of the existing
+arrays and return that instead.
+
+* The bad: ~nbody~
+
+Some of the benchmarks are suspiciously slow. Let's take a look at ~nbody~ from
+the Accelerate benchmark suite.
+
+By running ~nbody~ through ~futhark bench~ using the two different versions of
+the compiler, we get some idea of what's going on:
+
+#+begin_src
+[jxk588@a00333 nbody]$ futhark-master opencl ./nbody.fut && cat data/1000-bodies.in | ./nbody -P --runs 10 >/dev/null
+Peak memory usage for space 'device': 52000 bytes.
+copy_dev_to_dev       ran     0 times; avg:        0us; total:        0us
+copy_dev_to_host      ran     0 times; avg:        0us; total:        0us
+copy_host_to_dev      ran     0 times; avg:        0us; total:        0us
+copy_scalar_to_dev    ran     0 times; avg:        0us; total:        0us
+copy_scalar_from_dev  ran     0 times; avg:        0us; total:        0us
+segmap_intragroup_536 ran     1 times; avg:       72us; total:       72us
+1 operations with cumulative runtime:     72us
+
+
+[jxk588@a00333 nbody]$ futhark-existential-loop-6 opencl ./nbody.fut && cat data/1000-bodies.in | ./nbody -P --runs 10 >/dev/null
+Peak memory usage for space 'device': 76000 bytes.
+copy_dev_to_dev       ran     6 times; avg:        5us; total:       32us
+copy_dev_to_host      ran     0 times; avg:        0us; total:        0us
+copy_host_to_dev      ran     0 times; avg:        0us; total:        0us
+copy_scalar_to_dev    ran     0 times; avg:        0us; total:        0us
+copy_scalar_from_dev  ran     0 times; avg:        0us; total:        0us
+segmap_intragroup_536 ran     1 times; avg:       69us; total:       69us
+7 operations with cumulative runtime:    101us
+#+end_src
+
+We see that, using the ~existential-loop-6~ version, we get a lot of additional
+runs of ~copy_dev_to_dev~. Indeed, by examining the output of the explicit
+allocations run, we see the problem:
+
+#+begin_src futhark
+-- xps_364 : [n_354]f32@@xps_mem_951->
+{base: [n_354]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_354]; permutation: [0]; monotonicity: [Inc]}]}
+-- yps_365 : [n_355]f32@@yps_mem_952->
+{base: [n_355]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_355]; permutation: [0]; monotonicity: [Inc]}]}
+...
+entry {[?0]f32@?7->
+       {base: [?0]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+                                               rotates: [0i32]; shape: [?0];
+                                               permutation: [0];
+                                               monotonicity: [Inc]}]},
+       [?1]f32@?8->
+       {base: [?1]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+                                               rotates: [0i32]; shape: [?1];
+                                               permutation: [0];
+                                               monotonicity: [Inc]}]},
+       ...
+}
+main (mem xps_mem_951, mem yps_mem_952, ...,
+      i32 n_354, i32 n_355, ...,
+      [n_354]f32 xps_364, [n_355]f32 yps_365, ...) = {
+
+  ...
+
+  -- res_390 : [n_354]f32@@res_mem_1177->
+{base: [res_ixfn_1173]; contiguous: True; LMADs: [{offset: res_ixfn_1174; strides: [res_ixfn_1175]; rotates: [0i32]; shape: [res_ixfn_1176]; permutation: [0]; monotonicity: [Inc]}]}
+  -- res_391 : [n_354]f32@@res_mem_1182->
+{base: [res_ixfn_1178]; contiguous: True; LMADs: [{offset: res_ixfn_1179; strides: [res_ixfn_1180]; rotates: [0i32]; shape: [res_ixfn_1181]; permutation: [0]; monotonicity: [Inc]}]}
+  ...
+  let {i32 res_ixfn_1173, i32 res_ixfn_1174, i32 res_ixfn_1175,
+       ...,
+       mem res_mem_1177, ...;
+       [n_354]f32 res_390, [n_354]f32 res_391, ...} =
+    -- bodies_396 : [n_354]f32@@mem_param_962->
+{base: [ctx_param_ext_958]; contiguous: True; LMADs: [{offset: ctx_param_ext_959; strides: [ctx_param_ext_960]; rotates: [0i32]; shape: [ctx_param_ext_961]; permutation: [0]; monotonicity: [Inc]}]}
+    -- bodies_397 : [n_354]f32@@mem_param_967->
+{base: [ctx_param_ext_963]; contiguous: True; LMADs: [{offset: ctx_param_ext_964; strides: [ctx_param_ext_965]; rotates: [0i32]; shape: [ctx_param_ext_966]; permutation: [0]; monotonicity: [Inc]}]}
+    loop {i32 ctx_param_ext_958, i32 ctx_param_ext_959, i32 ctx_param_ext_960,
+          ...,
+          mem mem_param_962, mem mem_param_967, mem mem_param_972, ...;
+          [n_354]f32 bodies_396, [n_354]f32 bodies_397, ...} = { ... }
+    for _i_402:i32 < n_steps_361 do {
+        ...
+    }
+
+  ...
+
+  let {mem mem_1205} =
+    alloc(bytes_1203)
+  -- res_linear_1206 : [n_354]f32@@mem_1205->
+{base: [n_354]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_354]; permutation: [0]; monotonicity: [Inc]}]}
+  let {[n_354]f32 res_linear_1206} = copy(res_390)
+  let {i64 binop_x_1208} = sext i32 n_354 to i64
+  let {i64 bytes_1207} = mul_nw64(binop_x_1208, 4i64)
+  let {mem mem_1209} =
+    alloc(bytes_1207)
+  -- res_linear_1210 : [n_354]f32@@mem_1209->
+{base: [n_354]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_354]; permutation: [0]; monotonicity: [Inc]}]}
+  let {[n_354]f32 res_linear_1210} = copy(res_391)
+  let {i64 binop_x_1212} = sext i32 n_354 to i64
+  let {i64 bytes_1211} = mul_nw64(binop_x_1212, 4i64)
+  let {mem mem_1213} =
+    alloc(bytes_1211)
+  -- res_linear_1214 : [n_354]f32@@mem_1213->
+{base: [n_354]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_354]; permutation: [0]; monotonicity: [Inc]}]}
+  let {[n_354]f32 res_linear_1214} = copy(res_392)
+
+  ...
+
+  in {n_354, n_354, ... , mem_1205, mem_1209, ... ,
+      res_linear_1206, res_linear_1210, ...}
+}
+#+end_src
+
+The function has to return direct arrays (notice the type annotations at the
+top), and the results from the loop are not direct arrays in their current form,
+because we aggressively existentialize the entire index function (with the
+exception of the rotation). Therefore, copies are inserted.
+
+Now, after the explicit allocations pass, the simplifier determines that the
+offset and stride are actually loop invariant (they're always 0 and 1,
+respectively), so the index functions that result from the loop become direct,
+but the simplifier doesn't know to remove those extra copies at the
+end. Hopefully, we can implement a pass in the future which can remove these
+unnecessary copies.
+
+* The ugly: ~hotspot~, ~pathfinder~ and ~radix_sort_large~
+
+The ~hotspot~ and ~pathfinder~ from Rodinia also perform badly with my
+modifications, but not necessarily for the same reasons. Now, both do suffer
+from the same kind of problems with unnecessary copies that nbody does, but
+there's something else at work as well:
+
+#+begin_src
+$ futhark-existential-loop-6 opencl ./hotspot.fut && cat data/512.in | ./hotspot --runs 100 -t /dev/stderr >/dev/null
+32573
+11688
+11613
+31875
+31992
+31962
+11844
+32083
+11275
+32311
+32100
+32159
+11583
+...
+#+end_src
+
+
+#+begin_src
+$ futhark-existential-loop-6 opencl ./pathfinder.fut && cat data/medium.in | ./pathfinder --runs 100 -t /dev/stderr >/dev/null
+10915
+10787
+3533
+10733
+10790
+3511
+10786
+10974
+3643
+10877
+10977
+3613
+...
+#+end_src
+
+In both cases, the same basic patterns seem to repeat themselves. When running
+the ~pathfinder~ benchmark, we get two slow runs and one fast. For ~hotspot,~ the
+pattern is not quite as pronounced, but there are still some incredible jumps in
+performance.
+
+Interestingly, the ~radix_sort_large~ benchmark exhibit some of the same
+behavior, but here it is without my changes that the strange behavior manifest:
+
+#+begin_src
+ futhark-master opencl radix_sort_large.fut && cat data/radix_sort_100K.in | ./radix_sort_large --runs 10 -t /dev/stderr >/dev/null
+6181
+3607
+5987
+3380
+5966
+3460
+6004
+3449
+5975
+3477
+#+end_src
+
+I'm not sure what's going on here, but it warrants more investigation.
+
+* Next up
+
+First up, it would be nice to figure out why those numbers in ~hotspot~,
+~pathfinder~ and ~radix_sort_large~ vary so wildly. I should figure out whether
+the performance swings happen on the host or on the GPU, and then take it from
+there.
+
+Next week, I have to get started on an adaptation of the linear scan register
+allocation algoritm for array allocations in Futhark. More on that later.
