@@ -13,7 +13,7 @@ language theory, algorithms, concurrency and parallelism.
 * Futhark
 
  - [[file:futhark/improving-a-benchmark.org][Improving a Futhark benchmark]]
- - [[file:futhar/existentialized-loops.org][Existentialized index functions in loops]]
+ - [[file:futhark/existentialized-loops.org][Existentialized index functions in loops]]
 
 * pdb
  - [[file:pdb/lets-build-a-database.org][Let's build a database]]

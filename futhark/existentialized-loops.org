@@ -506,7 +506,7 @@ Interestingly, the ~radix_sort_large~ benchmark exhibit some of the same
 behavior, but here it is without my changes that the strange behavior manifest:
 
 #+begin_src
- futhark-master opencl radix_sort_large.fut && cat data/radix_sort_100K.in | ./radix_sort_large --runs 10 -t /dev/stderr >/dev/null
+$ futhark-master opencl radix_sort_large.fut && cat data/radix_sort_100K.in | ./radix_sort_large --runs 10 -t /dev/stderr >/dev/null
 6181
 3607
 5987
