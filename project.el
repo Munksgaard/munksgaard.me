@@ -19,7 +19,6 @@
          :publishing-function org-html-publish-to-html
          :headline-levels 4             ; Just the default for this project.
          :language "en"
-         :preserve-breaks t
          :section-numbers nil
          :time-stamp-file t
          :with-author t
