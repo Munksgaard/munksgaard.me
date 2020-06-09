@@ -1,0 +1,291 @@
+#+TITLE: Technical Diary, Day 2
+#+DATE: <2020-06-09 Tue>
+
+* Yesterday, and the plan for today
+
+Well, I started trying to write about my progress yesterday, and I think it went
+well. So far so good. I'll try to keep up writing this technical diary for the
+next two weeks (before I go on vacation). I'll do a retrospective at the end of
+each week to see if there's anything related to the process I could improve.
+
+I had some problems with my org-mode project which I use to publish these posts,
+but I figured it out today. Hopefully, publishing these diary entries will be
+straightforward now.
+
+Work-wise, I figured out how the allocator works and how Troels' fix to the
+allocator have improved the benchmarks of my existential loops. However, the
+~nbody~ benchmark is still very slow, even though it doesn't have that many
+copies, so today I'll try to figure out why. First I'll try to investigate the
+debugging output from running ~nbody~ on our test data set, in order to get an idea
+of how many allocation attempts there are. Then, I'll add some simple profiling
+to the allocator to see how many cache misses there are, guess at why they
+happen, and try to figure out how to avoid them.
+
+* What's wrong with ~nbody~?
+
+I thought I had fixed nbody with a small change in ~free_list_find~, but that
+turned out to be false.
+
+A [[https://github.com/diku-dk/futhark/pull/1014][bigger change]] seemed to do the trick though. As [[file:2020-06-08.org::*~opencl_alloc~ and friends][described yesterday]], the
+allocator looks primarily for existing allocations matching the given /tag/, or
+variable name. Troels' fix extends that strategy by also matching on allocations
+with the exact same size, which allows the allocator to reuse more allocations.
+My idea was to completely disregard tags, and instead rely only on the size
+information. My algorithm runs through the free list and finds the free
+allocation with the best matching size and returns it.
+
+There is a downside to this strategy: A program which continuously allocates
+larger and larger memory blocks using the same tag will never be able to reuse
+memory blocks, but it would keep all the previous allocations in the free list
+nonetheless. The previous allocator would remove and free existing allocations
+using the same tag before actually allocating a new block.
+
+However, the upside is that many of our benchmarks run substantially faster.
+
+#+begin_src
+/home/jxk588/src/futhark $ ./tools/cmp-bench-json.py bench-master.json bench-just-size.json
+
+futhark-benchmarks/accelerate/canny/canny.fut
+  data/lena512.in:                                                      1.16x
+  data/lena256.in:                                                      1.13x
+
+futhark-benchmarks/accelerate/crystal/crystal.fut
+  #0 ("200i32 30.0f32 5i32 1i32 1.0f32"):                               0.97x
+  #4 ("2000i32 30.0f32 50i32 1i32 1.0f32"):                             1.00x
+  #5 ("4000i32 30.0f32 50i32 1i32 1.0f32"):                             1.00x
+
+futhark-benchmarks/accelerate/fft/fft.fut
+  data/64x256.in:                                                       1.01x
+  data/128x512.in:                                                      1.15x
+  data/1024x1024.in:                                                    1.01x
+  data/512x512.in:                                                      1.05x
+  data/256x256.in:                                                      1.03x
+  data/128x128.in:                                                      1.04x
+
+futhark-benchmarks/accelerate/fluid/fluid.fut
+  benchmarking/medium.in:                                               1.07x
+
+futhark-benchmarks/accelerate/hashcat/hashcat.fut
+  rockyou.dataset:                                                      0.98x
+
+futhark-benchmarks/accelerate/kmeans/kmeans.fut
+  data/k5_n50000.in:                                                    1.00x
+  data/trivial.in:                                                      1.08x
+  data/k5_n200000.in:                                                   1.10x
+
+futhark-benchmarks/accelerate/mandelbrot/mandelbrot.fut
+  #1 ("1000i32 1000i32 -0.7f32 0.0f32 3.067f32 100i32 16...."):         1.01x
+  #3 ("4000i32 4000i32 -0.7f32 0.0f32 3.067f32 100i32 16...."):         1.00x
+  #2 ("2000i32 2000i32 -0.7f32 0.0f32 3.067f32 100i32 16...."):         1.00x
+  #0 ("800i32 600i32 -0.7f32 0.0f32 3.067f32 100i32 16.0f..."):         0.99x
+  #4 ("8000i32 8000i32 -0.7f32 0.0f32 3.067f32 100i32 16...."):         1.00x
+
+futhark-benchmarks/accelerate/nbody/nbody-bh.fut
+  data/10000-bodies.in:                                                 1.13x
+  data/100000-bodies.in:                                                1.06x
+  data/1000-bodies.in:                                                  1.07x
+
+futhark-benchmarks/accelerate/nbody/nbody.fut
+  data/10000-bodies.in:                                                 1.32x
+  data/100000-bodies.in:                                                1.00x
+  data/1000-bodies.in:                                                  3.15x
+
+futhark-benchmarks/accelerate/pagerank/pagerank.fut
+  data/small.in:                                                        1.04x
+  data/random_medium.in:                                                1.13x
+
+futhark-benchmarks/accelerate/ray/trace.fut
+  #0 ("800i32 600i32 100i32 50.0f32 -100.0f32 -700.0f32 1..."):         1.00x
+
+futhark-benchmarks/accelerate/smoothlife/smoothlife.fut
+  #1 ("256i32"):                                                        1.00x
+  #2 ("512i32"):                                                        0.99x
+  #3 ("1024i32"):                                                       1.00x
+  #0 ("128i32"):                                                        1.01x
+
+futhark-benchmarks/accelerate/tunnel/tunnel.fut
+  #1 ("10.0f32 1000i32 1000i32"):                                       1.00x
+  #4 ("10.0f32 8000i32 8000i32"):                                       1.00x
+  #0 ("10.0f32 800i32 600i32"):                                         1.00x
+  #2 ("10.0f32 2000i32 2000i32"):                                       1.00x
+  #3 ("10.0f32 4000i32 4000i32"):                                       1.00x
+
+futhark-benchmarks/finpar/LocVolCalib.fut
+  LocVolCalib-data/small.in:                                            0.99x
+  LocVolCalib-data/medium.in:                                           1.00x
+  LocVolCalib-data/large.in:                                            1.00x
+
+futhark-benchmarks/finpar/OptionPricing.fut
+  OptionPricing-data/medium.in:                                         1.04x
+  OptionPricing-data/small.in:                                          1.05x
+  OptionPricing-data/large.in:                                          1.00x
+
+futhark-benchmarks/jgf/crypt/crypt.fut
+  crypt-data/medium.in:                                                 2.51x
+
+futhark-benchmarks/jgf/crypt/keys.fut
+  crypt-data/userkey0.txt:                                              1.05x
+
+futhark-benchmarks/jgf/series/series.fut
+  data/1000000.in:                                                      1.00x
+  data/10000.in:                                                        0.99x
+  data/100000.in:                                                       1.00x
+
+futhark-benchmarks/misc/bfast/bfast-cloudy.fut
+  data/peru.in:                                                         0.94x
+  data/sahara-cloudy.in:                                                0.94x
+
+futhark-benchmarks/misc/bfast/bfast.fut
+  data/sahara.in:                                                       1.03x
+
+futhark-benchmarks/misc/heston/heston32.fut
+  data/1062_quotes.in:                                                  0.97x
+  data/10000_quotes.in:                                                 1.03x
+  data/100000_quotes.in:                                                0.99x
+
+futhark-benchmarks/misc/heston/heston64.fut
+  data/1062_quotes.in:                                                  1.00x
+  data/10000_quotes.in:                                                 1.00x
+  data/100000_quotes.in:                                                1.00x
+
+futhark-benchmarks/misc/knn-by-kdtree/buildKDtree.fut
+  valid-data/kdtree-ppl-32-m-2097152.in:                                1.01x
+
+futhark-benchmarks/misc/radix_sort/radix_sort_blelloch_benchmark.fut
+  data/radix_sort_100K.in:                                              0.84x
+  data/radix_sort_10K.in:                                               1.11x
+  data/radix_sort_1M.in:                                                1.09x
+
+futhark-benchmarks/misc/radix_sort/radix_sort_large.fut
+  data/radix_sort_100K.in:                                              1.01x
+  data/radix_sort_10K.in:                                               0.86x
+  data/radix_sort_1M.in:                                                1.02x
+
+futhark-benchmarks/parboil/histo/histo.fut
+  data/default.in:                                                      1.35x
+  data/large.in:                                                        1.33x
+
+futhark-benchmarks/parboil/mri-q/mri-q.fut
+  data/large.in:                                                        1.04x
+  data/small.in:                                                        1.03x
+
+futhark-benchmarks/parboil/sgemm/sgemm.fut
+  data/tiny.in:                                                         1.94x
+  data/small.in:                                                        1.54x
+  data/medium.in:                                                       1.11x
+
+futhark-benchmarks/parboil/stencil/stencil.fut
+  data/default.in:                                                      1.00x
+  data/small.in:                                                        1.00x
+
+futhark-benchmarks/parboil/tpacf/tpacf.fut
+  data/large.in:                                                        1.00x
+  data/small.in:                                                        1.00x
+  data/medium.in:                                                       1.00x
+
+futhark-benchmarks/pbbs/ray/ray.fut
+  data/angel.in:                                                        0.99x
+  data/dragon.in:                                                       1.05x
+  data/happy.in:                                                        1.02x
+
+futhark-benchmarks/rodinia/backprop/backprop.fut
+  data/small.in:                                                        1.22x
+  data/medium.in:                                                       1.16x
+
+futhark-benchmarks/rodinia/bfs/bfs_asympt_ok_but_slow.fut
+  data/64kn_32e-var-1-256-skew.in:                                      1.05x
+  data/512nodes_high_edge_variance.in:                                  1.03x
+  data/graph1MW_6.in:                                                   1.02x
+  data/4096nodes.in:                                                    0.99x
+
+futhark-benchmarks/rodinia/bfs/bfs_filt_padded_fused.fut
+  data/64kn_32e-var-1-256-skew.in:                                      0.97x
+  data/512nodes_high_edge_variance.in:                                  1.08x
+  data/graph1MW_6.in:                                                   1.12x
+  data/4096nodes.in:                                                    0.93x
+
+futhark-benchmarks/rodinia/bfs/bfs_heuristic.fut
+  data/64kn_32e-var-1-256-skew.in:                                      1.03x
+  data/512nodes_high_edge_variance.in:                                  1.05x
+  data/graph1MW_6.in:                                                   1.07x
+  data/4096nodes.in:                                                    1.21x
+
+futhark-benchmarks/rodinia/bfs/bfs_iter_work_ok.fut
+  data/64kn_32e-var-1-256-skew.in:                                      1.06x
+  data/512nodes_high_edge_variance.in:                                  1.24x
+  data/graph1MW_6.in:                                                   1.05x
+  data/4096nodes.in:                                                    1.15x
+
+futhark-benchmarks/rodinia/cfd/cfd.fut
+  data/fvcorr.domn.193K.toa:                                            1.00x
+  data/fvcorr.domn.097K.toa:                                            1.00x
+
+futhark-benchmarks/rodinia/hotspot/hotspot.fut
+  data/512.in:                                                          1.04x
+  data/1024.in:                                                         1.02x
+  data/64.in:                                                           1.04x
+
+futhark-benchmarks/rodinia/kmeans/kmeans.fut
+  data/kdd_cup.in:                                                      0.98x
+  data/100.in:                                                          1.02x
+  data/204800.in:                                                       1.00x
+
+futhark-benchmarks/rodinia/lavaMD/lavaMD.fut
+  data/3_boxes.in:                                                      1.40x
+  data/10_boxes.in:                                                     1.13x
+
+futhark-benchmarks/rodinia/lud/lud.fut
+  data/512.in:                                                          1.01x
+  data/64.in:                                                           0.99x
+  data/256.in:                                                          1.11x
+  data/16by16.in:                                                       1.01x
+  data/2048.in:                                                         1.01x
+
+futhark-benchmarks/rodinia/myocyte/myocyte.fut
+  data/small.in:                                                        0.99x
+  data/medium.in:                                                       1.00x
+
+futhark-benchmarks/rodinia/nn/nn.fut
+  data/medium.in:                                                       1.03x
+
+futhark-benchmarks/rodinia/nw/nw.fut
+  data/large.in:                                                        1.00x
+
+futhark-benchmarks/rodinia/particlefilter/particlefilter.fut
+  data/128_128_10_image_400000_particles.in:                            0.99x
+  data/128_128_10_image_10000_particles.in:                             1.01x
+
+futhark-benchmarks/rodinia/pathfinder/pathfinder.fut
+  data/medium.in:                                                       0.96x
+
+futhark-benchmarks/rodinia/srad/srad.fut
+  data/image.in:                                                        1.02x
+#+end_src
+
+It sounded like the others like the tradeoff, so hopefully the PR will land
+soon.
+
+* Better debugging information in ~opencl.h~
+
+As part of the process of figuring out why ~nbody~ was so slow, I've also added
+[[https://github.com/diku-dk/futhark/pull/1013][a bit of debugging output]] to the allocator. More might be warranted in the
+future, but for now, we're mostly interested in when allocations /actually/
+happen.
+
+* Issues
+
+ - Apparently, specifying that a source block contains futhark code causes the
+   block to not scroll correctly when rendered as HTML.
+
+* Tomorrow
+
+ - Let's try and get started on the linear scan algorithm. First, we need a way
+   to perform liveness analysis on the explicit memory allocation IR in Futhark.
+
+ - I should also start looking at the ICFP paper and artifact I'm supposed to
+   review. I should at least print the article tomorrow, so I can read it
+   tomorrow or the day after.
+
+* Longer term
+
+ - A more complete rewrite of the dynamic allocator might be warranted.
