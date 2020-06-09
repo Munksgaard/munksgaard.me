@@ -368,7 +368,7 @@ We see that, using the ~existential-loop-6~ version, we get a lot of additional
 runs of ~copy_dev_to_dev~. Indeed, by examining the output of the explicit
 allocations run, we see the problem:
 
-#+begin_src futhark
+#+begin_src
 -- xps_364 : [n_354]f32@@xps_mem_951->
 {base: [n_354]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_354]; permutation: [0]; monotonicity: [Inc]}]}
 -- yps_365 : [n_355]f32@@yps_mem_952->
