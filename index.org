@@ -33,6 +33,10 @@ language theory, algorithms, concurrency and parallelism.
  - [[file:papers/laumann-munksgaard-larsen.pdf][Session Types for Rust]]. To be presented at WGP '15
  - [[file:papers/munksgaard-laumann-thesis.pdf][Practical Session Types in Rust]]. MSc thesis, June 2015.
 
+* Technical diary
+
+[[file:technical-diary/2020-06-08.org][2020-06-08]]
+
 * Links
 
 https://github.com/Munksgaard/

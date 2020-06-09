@@ -1,0 +1,412 @@
+#+TITLE: Technical Diary, Day 1
+#+DATE: <2020-06-05 Fri>
+
+* The Purpose
+
+This is an experiment. I might remove these entries if I don't like how it turns
+out. The goal is to document my technical work in more detail, in order to help
+me be more conscious about what I spend my time on, deliberate about how I do
+it, and more mindful about the results.
+
+The main idea is that articulating what I've learned throughout the day helps
+crystallize those learnings in my head. Just like teaching others helps you
+understand a subject much deeper yourself[fn:1], by forcing myself to write for
+an audience (however imagined it may be) about what I have (or haven't) achieved
+throughout the day, those things that I've achieved will be embedded much deeper
+in my mind. At the same time, documenting my work in more detail like this, will
+make it easier for me to go back to something I've worked on in the past, and
+pick up from where I left. I hope.
+
+Therefore, I'll try to write clearly about what I'm doing, hopefully without too
+many half-finished notes and TODOs. That said, the primary audience of these
+entries is myself, and I don't necessarily expect what I'm writing here to be of
+interest to anyone else. I also won't be overly pedagogical, so expect something
+in between full blown blog posts for broad audiences and a haphazardly
+maintained text file full of personal notes.
+
+* Yesterday, and the plan for today
+
+I've been spending a lot of time over the last few weeks on existentializing
+~for~ loops in Futhark in order to avoid unnecessary copies. Late last week, I
+believed I was [[https://github.com/diku-dk/futhark/pull/1003][mostly finished]], but my changes turned out to reveal some [[file:../futhark/existentialized-loops.org::*The ugly:
+ ~hotspot~, ~pathfinder~ and ~radix_sort_large~][very inconsistent benchmark times]], seemingly related to the
+allocator. Troels merged a PR with [[https://github.com/diku-dk/futhark/pull/1006][some fixes for the allocator]], so today I have
+to investigate whether those changes fixed my inconsistent benchmarks. Before I
+do so though, I'd like to understand what he did, and why. I should also try to
+understand in general what the allocator does and how. Hopefully, with those
+changes, we can get my existentialized loops merge today or tomorrow.
+
+We also had [[https://github.com/github/linguist/pull/4842][our changes to linguist]] finally merged, which means Github should
+hopefully get syntax highlighting and file format recognition for Futhark.
+
+Finally, I had an idea for improving the examples in Erk's [[https://github.com/Erk-/genfut][genfut]] library, but
+after some initial investigation, I decided that it would be too much work for
+now.
+
+* ~rts~
+
+First of all, the allocator resides within the ~rts~ directory, which I haven't
+really looked at before. It seems to consist of common pieces of code that are
+included when Futhark writes its outputs, making up the common backend
+"runtimes" as it were.
+
+For instance, when compiling a simple test program using ~futhark opencl~, we
+see the resulting ~foo.c~ file contain the following bits and pieces from ~rts~:
+
+#+begin_src
+// Start of util.h.
+...
+// Start of timing.h.
+...
+// Start of values.h.
+...
+// Start of tuning.h.
+...
+// Start of lock.h.
+...
+// Start of free_list.h.
+...
+// Start of opencl.h.
+...
+#+end_src
+
+The OpenCL kernel also includes ~atomics.h~ from ~rts/c~.
+
+Let's take a quick look at what each of these does, leaving ~free_list.h~ out
+for now. But first, lunch... Good stuff.
+
+~util.h~ contains some generally usable files, mostly to do with error handling,
+string handling, and file I/O. ~timing.h~ has just ~get_wall_time~, which is
+prett self-explanantory. ~values.h~ is a larger file, which contains
+functionality to read and write textual and binary Futhark values. Probably used
+for reading array inputs and the like, when running something like ~echo
+[1i32] | ./foo~. The high-level functions are ~write_array~, ~read_array~,
+~write_scalar~ and ~read_scalar~.
+
+~tuning.h~ contains a function to load tuning files, which relies on a function
+argument called ~set_size~, which looks to be generated dynamically. Using
+~futhark opencl~, it looks like the function is called
+~futhark_context_config_set_size~.
+
+~lock.h~ contains a cross-platform implementation of a mutex lock. It seems to
+be used in the generated code to make sure that two instances of the Futhark
+program doesn't try to access the GPU device at the same time.
+
+~atomics.h~ is used by the generated GPU code (CUDA or OpenCL) to handle atomic
+arithmetic. ~opencl.h~ and ~cuda.h~ implement common helper functions for their
+respective platforms, like ~opencl_device_info~, ~build_opencl_program~, and
+~setup_opencl_with_command_queue~, but also, crucially for my current
+investigation, ~opencl_alloc~, ~opencl_free~. The allocation/dellocation
+functions, in turn, reference the functions in ~free_list.h~, which contain the
+actual implementation of the free list. Let's take a closer look at the
+allocation functions and the free list.
+
+* ~opencl_alloc~ and friends
+
+The ~opencl_alloc~ function is used to allocate GPU memory objects. The current
+implementation tries to reuse the same allocation for the same allocation point
+in the code. Meaning, that if there is an allocation at the start of loop, it
+will try to reuse that allocation each time to loop runs. It does so by taking
+the /tag/ or variable name of the allocation variable and passing that as an
+argument to the ~opencl_alloc~ function. That tag is then passed on to
+~free_list_find~ inside ~free_list.h~, which loops through the list of free
+allocations and tries to find one with the same name. The assumption is that
+there is always at most one block with a given tag in the free list. This means,
+that the allocator is /not/ primarily focused on the size of the allocation, but
+on the /name/. If there is no free allocation with the same name,
+~free_list_find~ will not return any allocation, even if there are allocations
+of the right size.
+
+Upon looking at ~free_list_find~ and ~opencl_alloc~ initially, I though we were
+primarily concerned with the size of the allocation, but that turned out to be
+false.
+
+In any case, when ~free_list_find~ returns a free block, ~opencl_alloc~ then
+checks if it is sufficiently large. If not, it free the returned block and
+allocates a new one.
+
+~opencl_free~ is similarly simple. First it releases any allocations from the
+free list with the same tag as the block it's trying to free, and then it
+inserts the current block in to the free list by calling ~free_list_insert~.
+
+In some cases, my existentialization-changes cause memory blocks to change names
+over the course of the program. This means that a block can be allocated under
+one name and freed under another name. Next time the same memory is being
+allocated, there is no free element in the list, so we have to perform a new
+allocation. Troels' fix solves this by also allowing ~free_list_find~ to return
+blocks with /identical/ size to the one we're trying to allocate. That'll find
+our earlier allocation of the same size.
+
+Still, perhaps there's a better way to do this. The dynamic allocator could
+probably use a rework, now that we cannot rely on tags as much as was previously
+the case. If we decide to rework it, the primary concern is the total size of
+allocations in the list. According to Troels, GPUs do not handle running out of
+memory well, so we'll need to make sure we're relatively conservative with our
+memory usage.
+
+* Impact on benchmarks with existentialized loops
+
+Now, we should take a look at the impact on the benchmarks, with the goal of
+merging the PR.
+
+So, we're comparing the compiler at commit
+931bd15749e8e025c5223be5411ae424f3e59ca0, which is the existential-loop-branch,
+to the compiler at commit 4fedd7191c32bf364790578b235d20068cb35c61, which is the
+master it is based on.
+
+#+begin_src
+[jxk588@a00333 futhark]$ ~/src/futhark/tools/cmp-bench-json.py bench-master-new.json bench-existential-loop-6-new.json
+
+futhark-benchmarks/accelerate/canny/canny.fut
+  data/lena512.in:                                                      1.03x
+  data/lena256.in:                                                      0.96x
+
+futhark-benchmarks/accelerate/crystal/crystal.fut
+  #0 ("200i32 30.0f32 5i32 1i32 1.0f32"):                               1.01x
+  #4 ("2000i32 30.0f32 50i32 1i32 1.0f32"):                             1.00x
+  #5 ("4000i32 30.0f32 50i32 1i32 1.0f32"):                             1.00x
+
+futhark-benchmarks/accelerate/fft/fft.fut
+  data/64x256.in:                                                       0.95x
+  data/128x512.in:                                                      0.94x
+  data/1024x1024.in:                                                    0.89x
+  data/512x512.in:                                                      0.91x
+  data/256x256.in:                                                      0.92x
+  data/128x128.in:                                                      0.92x
+
+futhark-benchmarks/accelerate/fluid/fluid.fut
+  benchmarking/medium.in:                                               0.96x
+
+futhark-benchmarks/accelerate/hashcat/hashcat.fut
+  rockyou.dataset:                                                      1.01x
+
+futhark-benchmarks/accelerate/kmeans/kmeans.fut
+  data/k5_n50000.in:                                                    1.13x
+  data/trivial.in:                                                      1.01x
+  data/k5_n200000.in:                                                   0.91x
+
+futhark-benchmarks/accelerate/mandelbrot/mandelbrot.fut
+  #1 ("1000i32 1000i32 -0.7f32 0.0f32 3.067f32 100i32 16...."):         1.02x
+  #3 ("4000i32 4000i32 -0.7f32 0.0f32 3.067f32 100i32 16...."):         1.00x
+  #2 ("2000i32 2000i32 -0.7f32 0.0f32 3.067f32 100i32 16...."):         1.00x
+  #0 ("800i32 600i32 -0.7f32 0.0f32 3.067f32 100i32 16.0f..."):         0.99x
+  #4 ("8000i32 8000i32 -0.7f32 0.0f32 3.067f32 100i32 16...."):         1.00x
+
+futhark-benchmarks/accelerate/nbody/nbody-bh.fut
+  data/10000-bodies.in:                                                 0.99x
+  data/100000-bodies.in:                                                0.98x
+  data/1000-bodies.in:                                                  0.98x
+
+futhark-benchmarks/accelerate/nbody/nbody.fut
+  data/10000-bodies.in:                                                 0.84x
+  data/100000-bodies.in:                                                1.00x
+  data/1000-bodies.in:                                                  0.52x
+
+futhark-benchmarks/accelerate/pagerank/pagerank.fut
+  data/small.in:                                                        1.00x
+  data/random_medium.in:                                                1.00x
+
+futhark-benchmarks/accelerate/ray/trace.fut
+  #0 ("800i32 600i32 100i32 50.0f32 -100.0f32 -700.0f32 1..."):         0.97x
+
+futhark-benchmarks/accelerate/smoothlife/smoothlife.fut
+  #1 ("256i32"):                                                        0.97x
+  #2 ("512i32"):                                                        0.91x
+  #3 ("1024i32"):                                                       0.95x
+  #0 ("128i32"):                                                        0.98x
+
+futhark-benchmarks/accelerate/tunnel/tunnel.fut
+  #1 ("10.0f32 1000i32 1000i32"):                                       1.00x
+  #4 ("10.0f32 8000i32 8000i32"):                                       1.00x
+  #0 ("10.0f32 800i32 600i32"):                                         1.00x
+  #2 ("10.0f32 2000i32 2000i32"):                                       1.00x
+  #3 ("10.0f32 4000i32 4000i32"):                                       1.00x
+
+futhark-benchmarks/finpar/LocVolCalib.fut
+  LocVolCalib-data/small.in:                                            1.00x
+  LocVolCalib-data/medium.in:                                           1.00x
+  LocVolCalib-data/large.in:                                            1.00x
+
+futhark-benchmarks/finpar/OptionPricing.fut
+  OptionPricing-data/medium.in:                                         0.98x
+  OptionPricing-data/small.in:                                          1.01x
+  OptionPricing-data/large.in:                                          1.00x
+
+futhark-benchmarks/jgf/crypt/crypt.fut
+  crypt-data/medium.in:                                                 0.98x
+
+futhark-benchmarks/jgf/crypt/keys.fut
+  crypt-data/userkey0.txt:                                              0.97x
+
+futhark-benchmarks/jgf/series/series.fut
+  data/1000000.in:                                                      1.00x
+  data/10000.in:                                                        1.00x
+  data/100000.in:                                                       1.00x
+
+futhark-benchmarks/misc/bfast/bfast-cloudy.fut
+  data/peru.in:                                                         1.00x
+  data/sahara-cloudy.in:                                                0.96x
+
+futhark-benchmarks/misc/bfast/bfast.fut
+  data/sahara.in:                                                       1.00x
+
+futhark-benchmarks/misc/heston/heston32.fut
+  data/1062_quotes.in:                                                  0.99x
+  data/10000_quotes.in:                                                 1.02x
+  data/100000_quotes.in:                                                1.00x
+
+futhark-benchmarks/misc/heston/heston64.fut
+  data/1062_quotes.in:                                                  1.00x
+  data/10000_quotes.in:                                                 1.00x
+  data/100000_quotes.in:                                                1.00x
+
+futhark-benchmarks/misc/knn-by-kdtree/buildKDtree.fut
+  valid-data/kdtree-ppl-32-m-2097152.in:                                1.01x
+
+futhark-benchmarks/misc/radix_sort/radix_sort_blelloch_benchmark.fut
+  data/radix_sort_100K.in:                                              1.10x
+  data/radix_sort_10K.in:                                               1.10x
+  data/radix_sort_1M.in:                                                1.00x
+
+futhark-benchmarks/misc/radix_sort/radix_sort_large.fut
+  data/radix_sort_100K.in:                                              1.01x
+  data/radix_sort_10K.in:                                               1.11x
+  data/radix_sort_1M.in:                                                1.01x
+
+futhark-benchmarks/parboil/histo/histo.fut
+  data/default.in:                                                      0.99x
+  data/large.in:                                                        1.03x
+
+futhark-benchmarks/parboil/mri-q/mri-q.fut
+  data/large.in:                                                        1.00x
+  data/small.in:                                                        0.94x
+
+futhark-benchmarks/parboil/sgemm/sgemm.fut
+  data/tiny.in:                                                         0.98x
+  data/small.in:                                                        1.05x
+  data/medium.in:                                                       1.00x
+
+futhark-benchmarks/parboil/stencil/stencil.fut
+  data/default.in:                                                      0.99x
+  data/small.in:                                                        0.99x
+
+futhark-benchmarks/parboil/tpacf/tpacf.fut
+  data/large.in:                                                        1.00x
+  data/small.in:                                                        1.00x
+  data/medium.in:                                                       1.00x
+
+futhark-benchmarks/pbbs/ray/ray.fut
+  data/angel.in:                                                        1.00x
+  data/dragon.in:                                                       1.00x
+  data/happy.in:                                                        1.00x
+
+futhark-benchmarks/rodinia/backprop/backprop.fut
+  data/small.in:                                                        1.05x
+  data/medium.in:                                                       0.99x
+
+futhark-benchmarks/rodinia/bfs/bfs_asympt_ok_but_slow.fut
+  data/64kn_32e-var-1-256-skew.in:                                      1.04x
+  data/512nodes_high_edge_variance.in:                                  0.98x
+  data/graph1MW_6.in:                                                   0.95x
+  data/4096nodes.in:                                                    0.99x
+
+futhark-benchmarks/rodinia/bfs/bfs_filt_padded_fused.fut
+  data/64kn_32e-var-1-256-skew.in:                                      0.99x
+  data/512nodes_high_edge_variance.in:                                  0.98x
+  data/graph1MW_6.in:                                                   1.04x
+  data/4096nodes.in:                                                    1.03x
+
+futhark-benchmarks/rodinia/bfs/bfs_heuristic.fut
+  data/64kn_32e-var-1-256-skew.in:                                      0.99x
+  data/512nodes_high_edge_variance.in:                                  1.08x
+  data/graph1MW_6.in:                                                   0.99x
+  data/4096nodes.in:                                                    1.01x
+
+futhark-benchmarks/rodinia/bfs/bfs_iter_work_ok.fut
+  data/64kn_32e-var-1-256-skew.in:                                      1.10x
+  data/512nodes_high_edge_variance.in:                                  1.34x
+  data/graph1MW_6.in:                                                   1.16x
+  data/4096nodes.in:                                                    1.27x
+
+futhark-benchmarks/rodinia/cfd/cfd.fut
+  data/fvcorr.domn.193K.toa:                                            1.00x
+  data/fvcorr.domn.097K.toa:                                            1.00x
+
+futhark-benchmarks/rodinia/hotspot/hotspot.fut
+  data/512.in:                                                          1.05x
+  data/1024.in:                                                         1.00x
+  data/64.in:                                                           1.00x
+
+futhark-benchmarks/rodinia/kmeans/kmeans.fut
+  data/kdd_cup.in:                                                      1.00x
+  data/100.in:                                                          1.01x
+  data/204800.in:                                                       1.00x
+
+futhark-benchmarks/rodinia/lavaMD/lavaMD.fut
+  data/3_boxes.in:                                                      0.99x
+  data/10_boxes.in:                                                     1.01x
+
+futhark-benchmarks/rodinia/lud/lud.fut
+  data/512.in:                                                          0.99x
+  data/64.in:                                                           1.00x
+  data/256.in:                                                          1.03x
+  data/16by16.in:                                                       0.99x
+  data/2048.in:                                                         1.00x
+
+futhark-benchmarks/rodinia/myocyte/myocyte.fut
+  data/small.in:                                                        1.02x
+  data/medium.in:                                                       0.99x
+
+futhark-benchmarks/rodinia/nn/nn.fut
+  data/medium.in:                                                       1.01x
+
+futhark-benchmarks/rodinia/nw/nw.fut
+  data/large.in:                                                        1.00x
+
+futhark-benchmarks/rodinia/particlefilter/particlefilter.fut
+  data/128_128_10_image_400000_particles.in:                            0.99x
+  data/128_128_10_image_10000_particles.in:                             0.97x
+
+futhark-benchmarks/rodinia/pathfinder/pathfinder.fut
+  data/medium.in:                                                       0.99x
+
+futhark-benchmarks/rodinia/srad/srad.fut
+  data/image.in:                                                        1.02x
+#+end_src
+
+Mostly, the results are the same as before, though ~pathfinder~ and ~hotspot~
+are not so slow any more. Unfortunately, ~nbody~ is still really slow for small
+datasets, so we'll need to do more investigation there.
+
+* Issues
+
+ - My current publishing setup in org-mode seem to not always pick up new files
+   automatically.
+
+ - It also doesn't handle links to sections in other files very well.
+
+* Tomorrow
+
+ - Let's try to get some profiling and instrumentation going for the dynamic
+   allocator. It would be nice to see why ~nbody~ is so slow.
+
+* Longer term
+
+ - After successfully adding Futhark highlighting to Github (although I still
+   don't know when it will actually show up in the system), I just noticed that
+   [[https://github.com/sharkdp/bat][~bat~]], which I use instead of ~cat~, doesn't have support for Futhark. [[https://github.com/sharkdp/bat#adding-new-syntaxes--language-definitions][Adding
+   support]] seems to require writing another kind of syntax file, but now that we
+   have a few different ones to work out from, perhaps it won't be a big deal.
+
+ - We should add some profiling information to the dynamic allocator. Troels
+   suggests just having some ~fprintf~s in the right places.
+
+ - Consider rewriting the dynamic allocator. Perhaps we can just use size. After
+   instrumenting with some timing information, we'll need to do some tests to
+   see what impact different strategies iwll have.
+
+
+* Footnotes
+
+[fn:1] That has been my experience and I believe it's well supported by
+scientific evidence.
