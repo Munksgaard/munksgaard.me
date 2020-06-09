@@ -12,7 +12,7 @@
       '(("munksgaard.me-org"
          :author "Philip Munksgaard"
          :email "philip@munksgaard.me"
-         :base-directory "./"
+         :base-directory (caar dir-locals-directory-cache)
          :base-extension "org"
          :publishing-directory "/ssh:munksgaard.me|sudo:www-data:/var/www/munksgaard.me"
          :recursive t
