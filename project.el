@@ -36,6 +36,11 @@
                           (content "article" "content")
                           (postamble "footer" "postamble"))
              :html-container "section"
+             :html-head "<style type=\"text/css\">
+    /*<![CDATA[*/
+      pre.src { overflow: auto; }
+    /*]]>*/
+   </style>"
              )
 
         '("munksgaard.me-static"
