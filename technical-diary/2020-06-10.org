@@ -1,0 +1,449 @@
+#+TITLE: Beginnings of a liveness analysis
+#+DATE: <2020-06-10 Wed>
+
+* Yesterday, and the plan for today
+
+Yesterday, I made an improvement for the dynamic allocator in Futhark. I only
+changed ~opencl.h~ though, and forgot to update ~cuda.h~ with the new
+~free_list_find~, so that has been fixed today.
+
+The plan today is to get a grip on the linear scan algorithm and figure out what
+I need in order to implement it for Futhark.
+
+When originally reading up on [[https://dl.acm.org/doi/10.1145/330249.330250][the linear scan register allocation algorithm]], I
+made notes that I never got around to publish. I should read through those
+again. In case I learn something new, I'll try to write it down here.
+
+Then, I'll make a broad plan for how I'm going to attack implementing the
+allocation algorithm in Futhark. I believe it's going to start with implementing
+a liveness analysis. Perhaps preceeded by some investigation into what kind of
+liveness analysis I should use.
+
+I also need to print the ICFP paper I'm supposed to artifact-review.
+
+* Futhark and the linear scan register allocation algorithm
+
+Actually, let's just insert my notes from the previous reading of the linear
+scan algorithm paper here. They serve as a good explanation of the basic problem
+we're trying to solve, how the linear scan algorithm works, and some initial
+thoughts on how to adapt the algorithm to work for our use case.
+
+** What is the problem that we're trying to solve
+
+We want to try to minimize the number of shared memory allocations in kernels.
+
+For instance, consider the following code snippet written in OpenCL:
+
+#+begin_src opencl
+  __kernel void
+  lud_perimeter(__global float *m,
+                __local  float *peri_row,
+                __local  float *peri_col,
+                int matrix_dim,
+                int offset)
+  {
+    int i,j, array_offset;
+    int idx;
+
+    int  bx = get_group_id(0);
+    int  tx = get_local_id(0);
+
+    array_offset = offset*matrix_dim+offset;
+
+    for (i=0; i < BLOCK_SIZE; i++) {
+      peri_row[i * BLOCK_SIZE+ idx]=m[array_offset+(bx+1)*BLOCK_SIZE+idx];
+      array_offset += matrix_dim;
+    }
+
+    for (i=0; i < BLOCK_SIZE; i++) {
+      peri_col[i * BLOCK_SIZE + idx] = m[array_offset+idx];
+      array_offset += matrix_dim;
+    }
+
+    /* Some code that uses peri_row */
+
+    /* Some code that uses peri_col */
+
+  }
+#+end_src
+
+Seeing that the uses ~peri_row~ and ~peri_col~ never overlap, it might be
+beneficial to instead generate something like the following:
+
+#+begin_src opencl
+  __kernel void
+  lud_perimeter(__global float *m,
+                __local  float *peri,
+                int matrix_dim,
+                int offset)
+  {
+    int i,j, array_offset;
+    int idx;
+
+    int  bx = get_group_id(0);
+    int  tx = get_local_id(0);
+
+    array_offset = offset*matrix_dim+offset;
+
+    for (i=0; i < BLOCK_SIZE; i++) {
+      peri[i * BLOCK_SIZE + idx]=m[array_offset+(bx+1)*BLOCK_SIZE+idx];
+      array_offset += matrix_dim;
+    }
+
+    /* Some code that uses peri as peri_row */
+
+    for (i=0; i < BLOCK_SIZE; i++) {
+      peri[i * BLOCK_SIZE + idx] = m[array_offset+idx];
+      array_offset += matrix_dim;
+    }
+
+    /* Some code that uses peri as peri_col */
+
+  }
+#+end_src
+
+Instead of having two local (shared) memory allocations, ~peri_col~ and
+~peri_row~, we only use one called ~peri~.
+
+Of course, that is OpenCL code, so what would it look like in Futhark?
+
+#+begin_src futhark
+  entry mapscan [k] (n: i32) (xs: [k]i32)
+               : [k]i32 =
+    let m = k / n
+    let xss' = unflatten m n xs
+    let xss =
+      map2 (\row i ->
+              let res1 =
+                loop row for _ in 0..<61 do
+                let row' = map (+i) row
+                in scan (+) 0 row'
+
+              let res2 =
+                loop row for _ in 0..<62 do
+                let row' = map (+i) row
+                in scan (+) 1 row'
+
+              in map2 (+) res1 res2
+           ) xss' (iota m)
+    in flatten_to k xss
+#+end_src
+
+Compiling this to the explicit allocations IR in Futhark produces the following
+piece of code:
+
+#+begin_src futhark
+  let {i64 binop_x_6072} = sext i32 n_5315 to i64
+  let {i64 double_buffer_size_6073} = mul64(4i64, binop_x_6072)
+  let {i64 binop_x_6077} = sext i32 n_5315 to i64
+  let {i64 double_buffer_size_6078} = mul64(4i64, binop_x_6077)
+
+  ...
+
+  let {[m_5320][n_5315]i32 res_5440} =
+    segmap_group
+    (#groups=m_5320; groupsize=n_5315)
+    (gtid_5359 < m_5320) (~phys_tid_5371) : {[n_5315]i32} {
+      -- x_5441 aliases res_coalesced_5871
+      -- x_5441 : [n_5315]i32@@mem_5946->{base: [n_5315, m_5320]; contiguous: False; LMADs: [{offset: gtid_5359; strides: [m_5320]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+      let {[n_5315]i32 x_5441} = res_coalesced_5871[gtid_5359,
+                                                    0i32:+n_5315*1i32]
+      let {mem@local double_buffer_mem_6070} =
+        alloc(double_buffer_size_6073, @local)
+      -- x_linear_double_buffer_copy_6074 : [n_5315]i32@@double_buffer_mem_6070->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+      let {[n_5315]i32 x_linear_double_buffer_copy_6074} = copy(x_5441)
+      let {mem@local mem_5955} =
+        alloc(bytes_5948, @local)
+      -- res1_5443 : [n_5315]i32@@double_buffer_mem_6070->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+      let {[n_5315]i32 res1_5443} =
+        -- Consumes x_linear_double_buffer_copy_6074
+        -- row_5444 : *[n_5315]i32@@double_buffer_mem_6070->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+        loop {*[n_5315]i32 row_5444} = {x_linear_double_buffer_copy_6074}
+        for i_5445:i32 < 61i32 do {
+          -- res_5446 : [n_5315]i32@@mem_5955->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+          let {[n_5315]i32 res_5446} =
+            segscan_thread
+            (#groups=m_5320; groupsize=n_5315)
+            (fn {i32} (i32 x_5447, i32 x_5448) =>
+               let {i32 res_5449} = add32(x_5447, x_5448)
+               in {res_5449},
+             {0i32})
+            (gtid_5362 < n_5315) (~phys_tid_5363) : {i32} {
+              let {i32 x_5450} = row_5444[gtid_5362]
+              let {i32 res_5451} =
+                <range_valid_c_5327>
+                add32(gtid_5359, x_5450)
+              return {returns res_5451}
+            }
+          -- double_buffer_array_6071 : [n_5315]i32@@double_buffer_mem_6070->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+          let {[n_5315]i32 double_buffer_array_6071} = copy(res_5446)
+          in {double_buffer_array_6071}
+        }
+      let {mem@local double_buffer_mem_6075} =
+        alloc(double_buffer_size_6078, @local)
+      -- x_linear_double_buffer_copy_6079 : [n_5315]i32@@double_buffer_mem_6075->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+      let {[n_5315]i32 x_linear_double_buffer_copy_6079} = copy(x_5441)
+      let {mem@local mem_5965} =
+        alloc(bytes_5948, @local)
+      -- res2_5452 : [n_5315]i32@@double_buffer_mem_6075->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+      let {[n_5315]i32 res2_5452} =
+        -- Consumes x_linear_double_buffer_copy_6079
+        -- row_5453 : *[n_5315]i32@@double_buffer_mem_6075->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+        loop {*[n_5315]i32 row_5453} = {x_linear_double_buffer_copy_6079}
+        for i_5454:i32 < 62i32 do {
+          -- res_5455 : [n_5315]i32@@mem_5965->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+          let {[n_5315]i32 res_5455} =
+            segscan_thread
+            (#groups=m_5320; groupsize=n_5315)
+            (fn {i32} (i32 x_5456, i32 x_5457) =>
+               let {i32 res_5458} = add32(x_5456, x_5457)
+               in {res_5458},
+             {1i32})
+            (gtid_5364 < n_5315) (~phys_tid_5365) : {i32} {
+              let {i32 x_5459} = row_5453[gtid_5364]
+              let {i32 res_5460} =
+                <range_valid_c_5327>
+                add32(gtid_5359, x_5459)
+              return {returns res_5460}
+            }
+          -- double_buffer_array_6076 : [n_5315]i32@@double_buffer_mem_6075->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+          let {[n_5315]i32 double_buffer_array_6076} = copy(res_5455)
+          in {double_buffer_array_6076}
+        }
+      let {mem@local mem_5969} =
+        alloc(bytes_5948, @local)
+      -- res_5461 : [n_5315]i32@@mem_5969->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+      let {[n_5315]i32 res_5461} =
+        segmap_thread
+        (#groups=m_5320; groupsize=n_5315)
+        (gtid_5366 < n_5315) (~phys_tid_5367) : {i32} {
+          let {i32 x_5462} = res1_5443[gtid_5366]
+          let {i32 x_5463} = res2_5452[gtid_5366]
+          let {i32 res_5464} = add32(x_5462, x_5463)
+          return {returns res_5464}
+        }
+      return {returns res_5461}
+    }
+  in {mem_5974, res_5440}
+#+end_src
+
+Here, we can see that two copies of ~x_5441~ are performed:
+
+#+begin_src futhark
+let {mem@local double_buffer_mem_6070} =
+  alloc(double_buffer_size_6073, @local)
+-- x_linear_double_buffer_copy_6074 : [n_5315]i32@@double_buffer_mem_6070->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+let {[n_5315]i32 x_linear_double_buffer_copy_6074} = copy(x_5441)
+
+...
+
+let {mem@local double_buffer_mem_6075} =
+  alloc(double_buffer_size_6078, @local)
+-- x_linear_double_buffer_copy_6079 : [n_5315]i32@@double_buffer_mem_6075->{base: [n_5315]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32]; rotates: [0i32]; shape: [n_5315]; permutation: [0]; monotonicity: [Inc]}]}
+let {[n_5315]i32 x_linear_double_buffer_copy_6079} = copy(x_5441)
+#+end_src
+
+Both 6074 and 6079 are only read from, they are the same size, and they dont
+overlap. In principle, we should be able to avoid both having to alloc twice,
+and having to copy twice. The purpose of using the linear scan register
+allocation is to avoid the extra allocation[fn:1]. Later, we'll have to investigate
+how to avoid the copy.
+
+** What is the problem that register allocation is trying to solve?
+
+Register allocation is the problem of assigning a limited number of registers to
+an arbitrary number of values. In CPUs, a register is the type of memory that is
+closest to the execution, meaning that accessing a register in order to perform
+some operation is orders of magnitude faster than accessing memory (RAM) to
+perform the same operation. Therefore, to make our programs run fast, we need
+make use of registers in an efficient manner. However, the number of registers
+is usually fairly limited; x86 for instance, only exposes 16 registers to the
+user. Therefore, if we have more than 16 variables in our program, we'll need to
+manage which variables reside in registers and which are "spilled" to memory at
+any given point in time. Common approaches to solving register allocation use
+some sort of liveness analysis to determine which variables are live at the same
+time and therefore need to co-exist. If two variables are not live at the same
+time, they can reuse each others' registers.
+
+The first algorithms for register allocation used graph coloring, and were able
+to make strong guarantees about the register allocation produced. Unfortunately,
+graph coloring is NP-complete, so using the graph coloring algorithms was slow,
+especially as the number of variables increased. In 1999, an alternative
+technique was proposed by Poletto and Sarkar: linear scan register allocation.
+
+** How does linear scan register allocation solve register allocation
+
+Lhe linear scan register allocation algorithm assumes a list of live-intervals,
+corresponding to the first and last use of each variable in the given
+program. The list is sorted in increasing first-use order, which the algorithm
+then loops through. For each first-use of a variable, it firsts frees registers
+allocated to variables that are no longer in use, and then allocates a free
+register to the new variable. If there are no free registers, it spills the
+variable that has the latest last-use (either the current variable to insert, or
+the last in the list of intervals).
+
+** How can we use linear scan register allocation to solve our problems
+
+The linear scan algorithm as devised by Poletto and Sarkar applies to registers,
+which are all more or less interchangable. We are interested in applying it to
+memory allocations which are not interchangable: They have sizes. On the other
+hand, we're not in theory limited in how many allocations we can have, we just
+want to minimize the total number of allocations as much as possible. Since in
+practice GPUs have limited memory, it would also be beneficial if we could limit
+the total accumulated size of all the allocations.
+
+So, in order for us to apply the linear scan algorithm, we'd need to keep track
+of the size of each allocation, in addition to its live-interval. Then, when a
+variable reaches its last-use, we can put the allocation into a list of free
+allocations, with the size information. When a new variable is introduced, we
+look through the list of free allocations in order to find one that fits. If
+none were found, we perform a new allocation.
+
+After the initial implementation, we can try to improve it. For instance, if we
+have two non-overlapping live-intervals, with the first requiring a smaller
+allocation than the latter, they cannot share the allocation, but if we know
+that they don't overlap, we can allocate the larger memory from the beginning in
+order to let them share that allocation.
+
+** Complications
+
+What if we don't know the size if the allocations at compile time? Perhaps one
+has size $f(x)$ and another has size $g(x)$, where $f$ and $g$ are some
+functions of $x$, or even worse, perhaps one has size $x$ and another has size
+$y$, where $x$ and $y$ are unrelated? In the former case, we can probably
+perform some symbolic arithmetic to determine which is larger. In the latter, we
+cannot do anything, except perhaps a dynamic check? But, if there are a lot of
+available arrays, all with unrelated sizes to check at runtime, the cost of
+doing so might outweigh the cost of performing the allocation.
+
+Also, what happens at the end of blocks? Are memory allocations that have been
+performed inside a block available to later code outside that block? Probably
+not, unless the block returns the array.
+
+* What's the plan
+
+In broad terms, I need to implement some sort of liveness analysis for the
+explicit memory IR first. In order to do that, I should try and investigate
+common methods for performing liveness analysis, in order to find one that's a
+good fit for our use case.
+
+To begin with, it's probably easiest if I create the liveness analysis in a
+separate repo, sort of like [[https://github.com/zfnmxt/futhark-forwards-ad][Roberts AD implementation]].
+
+After having created a liveness analysis, it's possible that I can do a simple
+implementation of the linear scan algorithm that only looks at the literal
+sizes and doesn't try to do any dynamic checking or symbolic arithmetic to
+determine which sizes are compatible.
+
+After that, I'll have to investigate both how to use symbolic arithmetic to
+improve the algorithm (Cosmin mentioned that there already is some code to do
+these kinds of calculations), and whether I should extend it using some sort of
+dynamic analysis.
+
+* Liveness analysis
+
+Torben Mogensen has a chapter on register allocation in his book [[http://hjemmesider.diku.dk/~torbenm/Basics/][Basics of
+Compiler Design]], which also includes a section about liveness analysis. He uses
+a bottom-up fix-point analysis which for each line keeps track of which
+variables are generated and killed, in order to compute ~in~ and ~out~, which
+variables are live at the start and end of each instruction, respectively. The
+Wikipedia page on liveness analysis seems to use the same basic technique.
+
+Of course, we're not so much interested in each variable, as we are interested
+in the underlying allocation block. When a ~mem~ is returned from an
+~if~-statement, it is assigned to a new variable, but the underlying allocation
+stays the same, and is live throughout. This means that we need to keep track of
+the underlying allocations, we need to be able to uniquely identify them, and
+know which variables use which memory blocks.
+
+** Well begun is halfway done
+
+Perhaps a good first program would be one that works through a given explicit
+memory IR and outputs for each statement, the name of the underlying blocks that
+are referenced.
+
+Let's first get a skeleton up and running. I have no real experience with
+writing Futhark passes, so I'll use Roberts AD implementation as inspiration.
+
+The main entry point in his code is the ~grad~ function, which takes a Futhark
+~Pass~ and weaves it into a Futhark compilation pipeline. We'll need to do
+something similar, only we'll be operating on the ~KernelsMem~ representation
+instead of ~SOACS~. A Futhark pipeline consists of a sequence of
+~Pass~. Creating a Futhark compilation pipeline is done using the ~passes~ and
+~onePass~ functions from ~Futhark.Pipeline~. ~passes~ is for passes within one
+representation, while ~onePass~ can be used to transform the IR from one
+representation to another. In addition, ~Futhark.Passes~ defines a set of
+pre-defined pipelines, which can be used to create your own.
+
+Ah, but we don't need to do a pass, for now. I'm really just interested in
+writing a function like this, where ~Liveness~ is a mapping from ~SubExp~ to a
+live range of some sort:
+
+#+begin_src haskell
+liveness :: FunDef KernelsMem -> Liveness
+#+end_src
+
+For now, I've started implementing it as an ~Action~ which can be applied at the
+end of a pipeline. I've uploaded the initial skeleton for the liveness analysis
+into its own repository [[https://github.com/Munksgaard/futhark-liveness][here]].
+
+* Miscellaneous
+
+** Org mode issues
+
+I fixed the overflow issue in source blocks on this blog pointed out by
+xiaomat by adding the following piece of code to the project project
+specification:
+
+#+begin_src emacs-lisp
+  :html-head "<style type=\"text/css\">
+    /*<![CDATA[*/
+      pre.src { overflow: auto; }
+    /*]]>*/
+  </style>"
+#+end_src
+
+For some reason, it's set "visible" by default...
+
+Also, adding source code colouring was surprisingly easy, just a matter of
+install htmlize from melpa.
+
+** Ormolu, nix, setting up a new project
+
+I've tried, and failed, a bunch of times, to find the meaning in Christine
+Dodrills [[https://christine.website/blog/how-i-start-nix-2020-03-08][elaborate nix setup]]. Today, while trying to set up a fresh Haskell
+project for the liveness analysis, part of it made sense. Having already set up
+[[https://direnv.net/][direnv]] and [[https://github.com/target/lorri][lorri]] in the past, I never really understood the need for [[https://github.com/nmattia/niv][niv]]. But I
+wanted to set up a nice Nix-based development environment for futhark-liveness,
+including using [[https://github.com/tweag/ormolu/][ormolu]], the Haskell formatter we've been considering for
+Futhark. It turns out that nixpkgs doesn't have the latest release of ormolu,
+but by using niv, I could easily install it straight from Github.
+
+Oh, and I got sidetracked /badly/ when I wanted to write a ~default.nix~ that
+could automatically overwrite the Futhark haskell package with a newer one from
+Github.
+
+* Tomorrow
+
+ - Continue with the liveness analysis. The immediate next step is to be able to
+   get some type information inside the ~livenessFun~ I've currently defined,
+   since I'm only interested in memory allocations. Then, I'll have to start
+   implementing the actual liveness analysis, using Torbens algorithm as
+   inspiration.
+
+* Issues
+
+ - From the linear scan algorithm article: "Another is depth-first ordering, the
+   reverse of the order in which nodes are last visited in a preorder traversal
+   of the flow graph [Aho et al. 1986]." I don't know what the "flow graph"
+   is. I should try to write an example to get an understanding of what they
+   mean by this sentence. Also, what are nodes, in this context? Variables?
+
+ - How to handle aliasing? In the expression ~let xs' = xs in ...~, ~xs'~ refers
+   to the same memory block as ~xs~, so even though ~xs~ might not be live any
+   more, the underlying memory block is still live.
+
+* Footnotes
+
+[fn:1] Reusing the same allocation is called "coalescing", in the context of register
+allocation.
