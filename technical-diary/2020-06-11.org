@@ -1,0 +1,35 @@
+#+title: 2020-06-11
+#+date: <2020-06-11 Thu>
+
+* Yesterday, and the plan for today
+
+Yesterday, I barely got my feet wet with the beginnings of a liveness analyser
+for Futhark. Today, the plan is to continue with it.
+
+* Off day
+
+I didn't get much of anything done today, but Cosmin, Troels, Robert and I had a
+nice chat at around mid-day. Cosmin doesn't think I need a liveness analysis,
+with the argument that I should be able to merge memory blocks in one pass
+without it. Instead, he suggests that I focus on last-use of each variable.
+
+I'm not quite sure I understand his reasoning. No matter what, every time a new
+array is created, I need to see if there are any existing arrays that are no
+longer used, and for that I need to analyze the whole program first, right? I'll
+have to dig deeper tomorrow.
+
+* Issues
+
+ - There's a problem with how the compiler chooses the memory space for loop
+   paramters. The handling of ~DoLoop~ in the ~ExplicitAllocations~ pass in
+   ~allocInMergeParams~ to be specific. Before, we tried to be clever about
+   putting loop parameters in the right memory space, but now everything gets
+   put in global memory. We'd like to put parameters in shared memory whenever
+   possible. Take a look at how the old ~allocInMergeParams~ did it, and see if
+   we can do something similar.
+
+* Tomorrow
+
+Move on with the liveness analysis. Even if I don't end up using it, writing
+something will help me get an understanding of how writing passes in Futhark
+works.
