@@ -1,0 +1,21 @@
+#+title: A slow day
+#+date: <2020-06-12 Fri>
+
+The plan from yesterday was to continue with the liveness analysis. I did get a
+start on the ~gen~ function which is needed for the liveness analysis. It's
+mostly done, although there are some todos and questions:
+
+ - How to handle the ~opaque~ operation? It tells the compiler /not/ to optimize
+   a particular expression, so we would probably like to avoid merging
+   allocations using opaque as well? Needs more thought.
+ - Blocks, in ~if~- and ~loop~-expressions for instance, are handled quite crudely, by just
+   taking the ~gen~ of all the inner statements. I don't think that'll actually
+   give us the result we want.
+ - There's an ~Op~ in ~BasicOp~ that I'm not quite sure to handle. In
+   ~KernelsMem~ it includes allocations, but maybe it also holds more stuff? I
+   don't know.
+ - What about variables in index functions? I don't think they are being
+   reported correctly at the moment. I need to figure out why.
+
+I didn't get to do my end-of-week review today. I'll try to write something over
+the weekend, possibly updating this post.
