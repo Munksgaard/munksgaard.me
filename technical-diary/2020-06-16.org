@@ -1,0 +1,94 @@
+#+title: 2020-06-16
+#+date: <2020-06-16 Tue>
+
+* Yesterday, and the plan for today
+
+Work on liveness analysis.
+
+* Goodbye liveness, hello last-use
+
+Cosmin says that we don't need liveness analysis. His point is that liveness
+analysis, and the algorithm I was implementing for it, is a technique for data
+flow analysis that mostly works on the simple imperative programming language
+defined in torbens book. It doesn't correctly handle ~kill~ and ~gen~ for
+arrays. I actually think my implementation of the algorithm works for the simple
+array examples I've tried, but it probably doesn't scale very well. Also, he's
+right that we can probably just rely on much simpler structural analysis of the
+program.
+
+Either way, his point is that we can use two passes: first-use and last-use to
+get the same information through structural analysis. The last-use analysis is a
+backwards pass, but is basically the same as the first-use. It's probably also
+much simpler than the liveness analysis that I was doing before.
+
+Correction: first-use is implied? I don't actually know why, but I guess it
+doesn't matter right now. Let's forget about the liveness analysis, and instead
+try to do a simpler last-use analysis.
+
+* Paper review
+
+Actually, before I start on the last-use analysis, I really should get started
+on the artifact review. Let's print the paper and read it, such that we know
+what to look for in the artifact.
+
+* An aside: Sway and the external monitor
+
+It seems like there's bug in the window manager I use, sway, which causes it to
+close all open windows and programs when docking into my dock at DIKU. According
+to emersion on #sway it's
+
+#+begin_quote
+12:16:33   emersion | fixed in sway master                                                                                                                                                        │ artymort
+12:17:15   emersion | this is a common dock issue caused by a rapid hotplug and unplug
+#+end_quote
+
+So, using NixOS, I thought it'd be an easy fix: Just override the version used
+in the derivation of sway to the newest master. After a lot of fiddling around
+and help on #nixos (thank you, clever) I came up with the following addition to
+my configuration.nix:
+
+#+begin_src
+  ...
+
+  nixpkgs.overlays = [ (self: super: { sway = super.sway.overrideAttrs (oldAttrs: rec {
+    version = "master";
+    src = super.fetchFromGitHub {
+      owner = "swaywm";
+      repo = "sway";
+      rev = "45859be03f14fa0506ab8518feaec5ddb157e318";
+      sha256 = "1nnkdw4djl0c0njgizz15x6flz7i9fbh71hk2hhhdazdyf0r9l3l";
+    };
+  }); }) ];
+
+  ...
+#+end_src
+
+Alas, that didn't fix my issue. I suspected that the new version wasn't being
+picked up from Github, so I even tried to override with a forked version of
+sway, in which I'd amended the output of ~--version~, and it seemed like I was
+correct. Indeed, clever suspects that the following override lines from the [[https://github.com/NixOS/nixpkgs/blob/release-20.03/nixos/modules/programs/sway.nix#L29-L34][sway
+module derivation]] are the culprit:
+
+#+begin_src
+  swayPackage = pkgs.sway.override {
+    extraSessionCommands = cfg.extraSessionCommands;
+    extraOptions = cfg.extraOptions;
+    withBaseWrapper = cfg.wrapperFeatures.base;
+    withGtkWrapper = cfg.wrapperFeatures.gtk;
+  };
+#+end_src
+
+I'll leave it for now. The dock that I have doesn't even work to charge my
+laptop, so it's not ideal anyway.
+
+* Printing at DIKU
+
+Because I always forget, and even though the link can be found on [[http://ucph.dk/][ucph.dk]], I'll
+still write this down once again.
+
+To print at DIKU, use [[https://webprint.science.ku.dk/][webprint.science.ku.dk]]. Upload the file you want to print,
+and choose the printer named HCO-01-0-S11.
+
+* Tomorrow
+
+Read the paper, make some notes, review the artifact.
