@@ -1,0 +1,40 @@
+#+title: More Liveness
+#+date: <2020-06-15 Mon>
+
+* Yesterday, and the plan for today
+
+Well, yesterday was the weekend, but on Friday I got a bit of work done on the
+liveness analysis. In particular, I implemented much of the ~gen~
+function. Today, the plan is to clarify those few questions I had about ~gen~,
+and to write ~kill~.
+
+* Questions about ~gen~
+
+** ~opaque~
+
+For now, I think it's easiest not to do any special handling of ~opaque~. I can
+always change it later, and I'm more afraid of messing up the liveness analysis
+than I am of accidentally un-opqaueing something.
+
+** Blocks
+
+I'm still not quite sure what the correct way to handle blocks are. Perhaps
+~gen~ and ~kill~ are not quite sufficient in their current incarnations? In
+fact, perhaps ~gen~ and ~kill~ should only be called on blocks themselves, and
+not the nested blocks. Then ~in~ and ~out~ are responsible for bridging the two?
+
+* Enter ~FreeIn~
+
+Of course, I'm not the first one to be needing this kind of information in the
+Futhark compiler, and so I just realized that the ~FreeIn~ type class provides
+me with everything I need. I knew about it before, but didn't understand exactly
+what it was that it did. Looking at it now, I can see that it returns the list
+of ~VName~ in some IR /thing/. This makes ~gen~ and ~kill~ much easier to make.
+
+Indeed, after deciding to use ~freeIn~, I was able to do the actual liveness
+analysis for most of the constructs in Futhark quite easily. The only major
+things left hanging are the ~Op~ instructions.
+
+* Tomorrow
+
+A day at DIKU!
