@@ -1,0 +1,122 @@
+#+TITLE: 2020-06-17
+#+DATE: <2020-06-17 Wed>
+
+* Yesterday, and the plan for today
+
+I spent a lot of time yesterday revising my understanding of what is needed for
+the linear scan allocation implementation (read: not liveness analysis in the
+tradition sense using ~gen~ and ~kill~ sets). However, today is going to be
+mostly about reading and watching talks.
+
+Troels suggested I watch the talk on [[https://www.youtube.com/watch?v=MqUcMIlKk8Y&feature=youtu.be&t=4767][Hacks to Compensate for Lack of Novelty in
+Programming Languages Resarch]] by Alistair F. Donaldson from the Programming
+Languages Mentoring Workshop at PLDI2020, so I'm doing that first. I
+found another talk on [[https://www.infoq.com/presentations/functional-programming-parallelism/][Functional Programming for Array-Based Parallelism]] by
+Gabrielle Keller, which sounds like it could be interesting for me as well, even
+though it's probably mostly stuff that I know.
+
+Finally, I have to read the article for the ICFP2020 artifact review I'm doing,
+and actually review the artifact.
+
+* Our array paper
+
+I had a brief talk with Cosmin yesterday about the paper we're writing on
+autotuning. The paper was originally intented for the ARRAY workshop at PLDI2020,
+but it got cancelled because of Corona, so it's kind of lingering in limbo at
+the moment. Cosming (rightfully) wants us to finish it, but I must admit that I
+have a hard time setting myself up to it, with no concrete workshop in sight.
+
+Nevertheless, he'd begun revising my initial attempt at an introduction to the
+paper and had some good thoughts about what I'd done, and how better to approach
+writing an introduction, that I'll try to condense here. Really, I should've
+done this yesterday, but I forgot.
+
+In short, Cosmin likened what I had written to an introduction from a Masters
+Thesis or something like that. Instead of describing the actual problems that
+our paper attempts to solve, I wrote a lot of fuzz about Futhark without
+contextualizing with something that people outside of functional programming
+languages are interested in. The actual problem, /automatically determining how
+to effectively parallelize code for different and changing degrees of
+parallelism/, isn't introduced until very late, and only in the context of
+Futhark. In contrast, Cosmin treats the subject more broadly, and briefly
+explains how other attempts have failed at doing so effectively.
+
+I think the weakness of my introduction stems from my lack of understanding of
+the underlying problem when I was writing it. It's very easy to hide lack of
+deep understanding with buzz-words and "generic" pep. I also didn't (and still
+don't) know enough about related work to effectively contextualize the
+autotuning work I've done.
+
+Next time I'm writing an introduction, I should try to be more concrete. Perhaps
+start by writing down exactly what it is I want to convey with the introduction
+and in which order, and then seek to expand on those different sections.
+
+* Lack of Novelty
+
+[[https://www.youtube.com/watch?v=MqUcMIlKk8Y&feature=youtu.be&t=4767][This]] was an interesting and pragmatic talk by Alistair. He gave lots of concrete
+pragmatic advise and framed it with helpful examples.
+
+My key takeaways were:
+
+ - Don't be scared if your work doesn't have a lot of novelty in it. There are
+   other ways to get published and to create impactful research.
+ - Reframing your research can mask the lack of novelty, replacing it with
+   something useful. A really well done experimental validation or case study can
+   make up for lack of novelty.
+ - A survey can make for really impactful research, even though it doesn't bring
+   much novelty.
+ - Different communities might appreciate your work more. His example was of an
+   application of formal verification to systems programming. None of it was
+   entirely novel to any of those two specific communities, but it was perfect
+   for an engineering-oriented conference.
+ - Try a journal!
+
+* Functional Programming for Array-Based Parallelism
+
+Gabrielles [[https://www.infoq.com/presentations/functional-programming-parallelism/][talk]] was mostly an introduction to parallel programming concepts, and
+what kind of considerations and concerns you have to have in mind when mapping
+functional programming constructs to parallel programming languages. That said,
+it was a pretty good introduction to such topis, I think. At the end, she
+mentioned both Lift, Accelerate (which she works on) and Futhark as examples of
+array-based parallel functional programming languages. She also showed two
+examples that they'd used in Accelerate to benchmark their code:
+
+ - Simulating the formation of spatial patterns in eco systems, which, if I
+   understood correctly, used stencils to map sediment to water flow.
+ - [[https://computing.llnl.gov/projects/co-design/lulesh][LULESH]] - Livermore Unstructured Lagrangian Explicit Shock Hydrodynamics,
+   which I have no clue what is. It looks like it's a fairly heavy program
+   though, which they're using to and showcase accelerate.
+
+We could consider porting those two benchmarks to Futhark. Looking at [[https://www.acceleratehs.org/examples.html][the
+examples from the Accelerate project]], there are other good ideas:
+
+ - [[https://www.acceleratehs.org/examples/fluid.html][Particle-based fluid simulation]]
+ - [[https://www.acceleratehs.org/examples/canny.html][Edge-detection]]
+ - [[https://www.acceleratehs.org/examples/mandelbrot.html][Mandelbrot]]
+
+I suspect we already have most of these somewhere?
+
+Indeed, fluid-simulation has been done [[https://futhark-lang.org/blog/2016-12-04-diving-beet.html][here]], although it's not quite the same as
+the fluid simulator from Accelerate. Same for [[https://github.com/diku-dk/futhark-benchmarks/tree/master/accelerate/mandelbrot][Mandelbrot]]. In fact, I now see
+that there's a whole [[https://github.com/diku-dk/futhark-benchmarks/tree/master/accelerate][library of Futhark ports of Accelerate benchmarks]], which I
+actually did know about.
+
+Oh well.
+
+As an aside, someone [[https://news.ycombinator.com/item?id=23536190][on HackerNews]] mentioned two papers about NESL and nested
+data parallelism that might be interesting to read:
+
+ - [[https://dl.acm.org/doi/abs/10.1145/351240.351249][More types for nested data parallel programming]]
+ - [[https://www.cs.cmu.edu/~guyb/papers/Nesl2.0.pdf][NESL: A Nested Data-Parallel Language]]
+
+* ICFP2020 Artifact Review
+
+Very cool paper. There's a lot of theory that I don't understand, and I don't
+know how applicable it is in practical scenarios. The artifact was great, easy
+to use and contained all the important bits.
+
+* Tomorrow
+
+Get started on the liveness analysis. Cosmin has sent me some snippets I can
+work from, and the discussion still rages whether we can avoid considering
+memory blocks or not. We'll see.
