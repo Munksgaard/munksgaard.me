@@ -1,0 +1,92 @@
+#+TITLE: 2020-06-18
+#+DATE: <2020-06-18 Thu>
+
+* Yesterday, and the plan for today
+
+Yesterday, most of the day was spent on reading and watching talks, though I
+also finished my artifact review.
+
+Today, I'd like to get my feet wet with the last-use analysis. Perhaps I'll
+spend an hour or so trying to do it myself, in order to get my head around what
+is needed. Then I'll take a look at Cosmins code.
+
+* SPJ Q&A
+
+I spent a bit of time this morning watching a [[https://youtu.be/jGgQmnPH0dQ?t=152][Q&A session with Simon Peyton
+Jones]], who is always enlightening to listen to. I don't really have any concrete
+takeaways from the session, but I always enjoy his excited way of talking about
+functional programming languages and education.
+
+* Type checker error in futracer
+
+The user gabriel-fallen [[https://github.com/diku-dk/futhark/issues/1025][reported an ICE in Futhark today]]. I'd like to take a
+look at it and see if I can figure out what's going on, before Troels fixes
+it. Luckily, he has a lot of bachelors defenses today, so there is hope that
+might actually happen. The [[https://pastebin.com/VTtG7Y6U][invalid program]] is really large, but I should at
+least be able to bisect the Futhark compiler and find the problematic
+commit. Since bisecting the Futhark is pretty slow, perhaps I can set up an
+automatic test that can run while I work on last-use.
+
+Oh wow, this is a long-standing bug, it's from before the introduction of
+attributes. I'm currently bisecting between `v0.15.6` and `v0.15.5` using the
+command `stack install && (cd ~/src/futracer; make clean all)`. We'll see how it
+goes.
+
+Great progress! Commit [[https://github.com/diku-dk/futhark/commit/6161f1c14c9ee6fece610a09cd49bae2d71a36ec][6161f1c14c9ee6fece610a09cd49bae2d71a36ec]] is the culprit.
+
+Troels did [[https://github.com/diku-dk/futhark/issues/1025#issuecomment-645929148][some further digging]] and figured out that [[https://github.com/diku-dk/futhark/commit/6161f1c14c9ee6fece610a09cd49bae2d71a36ec#diff-c811d70c267c78d17a70589e5fd79a8aL213-R241][the changes to
+~leavingNesting~]] are the likely cause. I have no clue what's going on in there,
+so I'll leave that to him.
+
+* Last-use
+
+A [[https://github.com/Munksgaard/futhark-last-use][very simplistic last-use analysis]] turned out to be easy to implement. The meat
+of the code is the function ~lastUse~:
+
+#+begin_src haskell
+  lastUse :: Stms KernelsMem -> Map VName Int
+  lastUse stms =
+    zip (toList stms) [0 ..]
+      & reverse
+      & foldr helper Map.empty
+    where
+      helper :: FreeIn a => (a, Int) -> Map VName Int -> Map VName Int
+      helper (stm, i) m =
+        freeIn stm
+          & namesToList
+          & foldr (flip Map.insert i) m
+#+end_src
+
+In essence, for each statement in normal order of the program, we find the free
+variables referred to within that statement and add them to the last-use
+map. Instead of traversing backwards through the program, we just rely on the
+fact that ~Map.insert~ overwrites existing entries.
+
+Now, of course, this doesn't really handle blocks. For instance, when analysing
+the following program, the statements inside the ~if~ expression are not
+counted:
+
+#+begin_src futhark
+let main (xs: *[]i32): *[]i32 =
+  let xs[1] = xs[0]
+  let ys =
+    if xs[0] > 0 then
+      xs
+    else
+      indices xs
+
+  let ys[2] = 4
+  in ys
+#+end_src
+
+I don't think that's necessarily a problem, it should be handled by the linear
+scan algorithm.
+
+However, I do need to handle aliasing...
+
+I managed to hook into ~Futhark.Analysis.Alias~. It seems like ~analyseStms~ is
+just what I need. I'll need to investigate further tomorrow.
+
+* Tomorrow
+
+Use the aliasing information from ~analyseStms~ to refine the last-use analysis.
