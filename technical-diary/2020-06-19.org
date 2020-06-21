@@ -1,0 +1,30 @@
+#+TITLE: 2020-06-19
+#+DATE: <2020-06-19 Fri>
+
+* Yesterday, and the plan for today
+
+I managed to get a good start at the last-use analysis yesterday. It is pretty
+simplistic, but it seems to work alright. I want to expand it with aliasing
+support today. I haven't taken a hard look at Cosmins code yet, and I don't
+really know why it's so much more involved than mine. It would be nice to
+investigate a bit before our meeting at 15:15.
+
+Robert says there's a meeting in Fritz' group that might be interesting for me
+today; Troels is doing a talk. It's at 11:00, so if I can get some good progress
+on the aliasing stuff before then, I'll try to go.
+
+* Today
+
+I didn't get that much done today, as most of the time was taken up by
+meetings. I did apply aliasing though.
+
+* bfast
+
+According to Troels, bfast is not being tuned correctly with the new
+autotuner. Or it could be that moderate flattening is better than incremental?
+
+* Tomorrow
+
+I'm going on vacation! I'll be back with more updates on
+<2020-07-01 Wed>. Hopefully I'll be able to write a retrospective on this
+process before then.
