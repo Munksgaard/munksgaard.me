@@ -1,0 +1,297 @@
+#+TITLE: 2020-07-02
+#+DATE: <2020-07-02 Thu>
+
+* Yesterday, and the plan for today
+
+I've been on vacation for the last week and a half, so today is going to be
+mostly about getting back up to speed. To take it easy, I'll investigate why the
+bfast benchmark is not getting autotuned correctly. I also want to dedicate some
+time to writing a retrospective on the process of writing these technical diary
+entries.
+
+* Retrospective
+
+Let's start with some statistics first.
+
+#+begin_src
+$ wc -l *.org
+  412 2020-06-08.org
+  291 2020-06-09.org
+  449 2020-06-10.org
+   35 2020-06-11.org
+   21 2020-06-12.org
+   40 2020-06-15.org
+   94 2020-06-16.org
+  122 2020-06-17.org
+   92 2020-06-18.org
+   30 2020-06-19.org
+   14 2020-07-02.org
+#+end_src
+
+I've written 10 entries so far, one for each work-day since I started this
+experiment. The first three days are by far the longest entries, mostly because
+of some long source listings, but also because the entries themselves were
+written more in-depth. Some of the later entries are very short, just 14 lines
+for the last one.
+
+Why are some entries so short? Part of it is certainly that, on some days, less
+actual work gets done than on others. There are also types of work that is
+harder to write useful reflections about: applying aliasing to my last-use
+analysis as described in [[file:2020-06-19.org::*Today][the entry from 2020-06-19]], for instance, is mostly just
+about fiddling with the current code, looking up some functions in the Futhark
+library and so forth. However, I think the biggest reason why the entries on
+some days are shorter than on other days, is that I don't have or take the time
+to actually write in the diary as I work. Writing continually throughout the
+day, using the writing as a way to concretize what I'm doing, to help steer my
+process, was the goal all along, but it is difficult to keep up and requires
+discipline. Sometimes it's just easier to hack along on some code or try to fix
+some bug without having to document everything as I go along.
+
+I think it's important to find a compromise that works for me. Ideally, I'd like
+to document everything meticulously as I did in some of those first days: doing
+to resulted in some productive days, and it's great to be able to go back and
+read what I was doing. But I probably also have to face that that's not going to
+work every day, at least not initially.
+
+One final thing that I'll note, is that I sometimes "forget" to finish my entry
+for the day. Either because I have to hurry out of the office to go somewhere,
+or because I simply forget to. Sometimes I finish up the entry later in the
+evening, and sometimes I only get around to it the day after. I don't think
+there's any shame in doing so, after all, no-one is sitting around waiting for
+my daily entry, but I have noticed that when I don't finish up my daily entry in
+a timely manner, I miss that end-of-the-day reflective thinking. I think that,
+by trying to be a bit more diligent about finishing up the entry as part of the
+actual work-day, I could improve the re-readability and the reflective quaility
+of the entries.
+
+* ~bfast~
+
+As mentioned [[file:2020-06-19.org::*bfast][previously]], Troels has mentioned that ~bfast~ is not being tuned
+correctly using the new autotuner I created, or at least that it is not as fast
+as it should be. The problem could also be that ~bfast~ is just slower with
+incremental flattening than without. Let's try to find out what's wrong.
+
+First, we'll build and install the latest version of Futhark on gpu04. When that
+is done, let's run the bfast benchmark with and without tuning, and compare the
+results. Perhaps we need to compare to an older version of Futhark also, maybe
+the one just before merging default incremental flattening? That would be
+0.15.8. Thankfully, I already have that installed on gpu04.
+
+Here's the untuned benchmark results using current master:
+
+#+begin_src
+$ futhark bench --backend=opencl --json untuned.json --no-tuning --runs 100 bfast.fut
+Compiling bfast.fut...
+Reporting average runtime of 100 runs for each dataset.
+
+Results for bfast.fut:
+data/sahara.in:      14883μs (RSD: 0.004; min:  -0%; max:  +3%)
+#+end_src
+
+Here's the tuning results:
+
+#+begin_src
+$ futhark autotune --backend=opencl bfast.fut
+Compiling bfast.fut...
+Tuning main.suff_intra_par_12 on entry point main and dataset data/sahara.in
+Tuning main.suff_outer_par_10 on entry point main and dataset data/sahara.in
+Tuning main.suff_outer_par_16 on entry point main and dataset data/sahara.in
+Tuning main.suff_outer_par_15 on entry point main and dataset data/sahara.in
+Tuning main.suff_outer_par_8 on entry point main and dataset data/sahara.in
+Tuning main.suff_outer_par_9 on entry point main and dataset data/sahara.in
+Tuning main.suff_intra_par_6 on entry point main and dataset data/sahara.in
+Tuning main.suff_outer_par_5 on entry point main and dataset data/sahara.in
+Wrote bfast.fut.tuning
+Result of autotuning:
+main.suff_intra_par_12=2000000000
+main.suff_intra_par_6=2000000000
+main.suff_outer_par_10=2000000000
+main.suff_outer_par_15=543744
+main.suff_outer_par_16=4349952
+main.suff_outer_par_5=2000000000
+main.suff_outer_par_8=28138752
+main.suff_outer_par_9=543744
+#+end_src
+
+The tuned benchmark results:
+
+#+begin_src
+$ futhark bench --backend=opencl --json tuned.json --runs 100 bfast.fut
+Compiling bfast.fut...
+Reporting average runtime of 100 runs for each dataset.
+
+Results for bfast.fut (using bfast.fut.tuning):
+data/sahara.in:      11976μs (RSD: 0.141; min: -14%; max: +22%)
+#+end_src
+
+And the comparison:
+
+#+begin_src
+$ ../../../tools/cmp-bench-json.py untuned.json tuned.json
+
+bfast.fut
+  data/sahara.in:                                                       1.24x
+#+end_src
+
+So, tuning the program definitely gives us an improvement over the untuned
+version. Now there are two questions: Are the tuning parameters actually
+optimal, and is the performance of the tuned program a regression from earlier
+results without incremental flattening?
+
+Let's investigate the latter first:
+
+#+begin_src
+$ futhark-0.15.8 bench --backend=opencl --json 0.15.8.json --no-tuning --runs 100 bfast.fut
+Compiling bfast.fut...
+Reporting average runtime of 100 runs for each dataset.
+
+Results for bfast.fut:
+data/sahara.in:       7873μs (RSD: 0.064; min:  -2%; max: +24%)
+#+end_src
+
+Aha! Our tuned program with incremental flattening is 33% slower than the
+untuned version from Futhark 0.15.8. Let's see what kernels are being run
+(filtered for just the kernels with at least 1 run):
+
+#+begin_src
+$ futhark opencl bfast.fut
+$ gunzip -c data/sahara.in.gz | ./bfast -e main -P --tuning bfast.fut.tuning > /dev/null
+Peak memory usage for space 'device': 734489448 bytes.
+copy_dev_to_dev              ran     4 times; avg:        6us; total:       26us
+copy_5781                    ran     1 times; avg:       97us; total:       97us
+main.scan_stage1_1973        ran     1 times; avg:      589us; total:      589us
+main.scan_stage2_1973        ran     1 times; avg:        7us; total:        7us
+main.scan_stage3_1973        ran     1 times; avg:       98us; total:       98us
+main.segmap_1050             ran     1 times; avg:       22us; total:       22us
+main.segmap_1171             ran     1 times; avg:        7us; total:        7us
+main.segmap_1229             ran     1 times; avg:        6us; total:        6us
+main.segmap_1899             ran     1 times; avg:      196us; total:      196us
+main.segmap_2002             ran     1 times; avg:        4us; total:        4us
+main.segmap_2187             ran     1 times; avg:       48us; total:       48us
+main.segmap_2460             ran     8 times; avg:      132us; total:     1062us
+main.segmap_2510             ran     8 times; avg:      154us; total:     1234us
+main.segmap_2664             ran     1 times; avg:      148us; total:      148us
+main.segmap_2705             ran     1 times; avg:     3238us; total:     3238us
+main.segmap_2902             ran     1 times; avg:      354us; total:      354us
+main.segmap_intragroup_4151  ran     1 times; avg:     1431us; total:     1431us
+main.segred_large_2030       ran     1 times; avg:      464us; total:      464us
+main.segred_large_2297       ran     1 times; avg:     4392us; total:     4392us
+main.segred_small_2060       ran     1 times; avg:      149us; total:      149us
+map_transpose_f32_low_height ran     2 times; avg:       43us; total:       86us
+replicate_5435               ran     1 times; avg:       11us; total:       11us
+40 operations with cumulative runtime:  13669us
+#+end_src
+
+Same for the old version
+
+#+begin_src
+$ futhark-0.15.8 opencl bfast.fut
+$ gunzip -c data/sahara.in.gz | ./bfast -e main -P  > /dev/null
+Peak memory usage for space 'device': 338209512 bytes.
+copy_dev_to_dev              ran     4 times; avg:        9us; total:       36us
+copy_2612                    ran     1 times; avg:       98us; total:       98us
+map_transpose_f32            ran     1 times; avg:      468us; total:      468us
+map_transpose_f32_low_height ran     1 times; avg:        8us; total:        8us
+replicate_2557               ran     1 times; avg:        6us; total:        6us
+scan_stage1_1117             ran     1 times; avg:      630us; total:      630us
+scan_stage2_1117             ran     1 times; avg:        6us; total:        6us
+scan_stage3_1117             ran     1 times; avg:      103us; total:      103us
+segmap_1001                  ran     1 times; avg:        6us; total:        6us
+segmap_1016                  ran     1 times; avg:        6us; total:        6us
+segmap_1057                  ran     1 times; avg:      200us; total:      200us
+segmap_1145                  ran     1 times; avg:      130us; total:      130us
+segmap_1233                  ran     1 times; avg:       51us; total:       51us
+segmap_1302                  ran     8 times; avg:      132us; total:     1061us
+segmap_1322                  ran     8 times; avg:      153us; total:     1227us
+segmap_1369                  ran     1 times; avg:      147us; total:      147us
+segmap_1395                  ran     1 times; avg:     2332us; total:     2332us
+segmap_1435                  ran     1 times; avg:      354us; total:      354us
+segmap_960                   ran     1 times; avg:       25us; total:       25us
+segmap_intragroup_1561       ran     1 times; avg:     1271us; total:     1271us
+segmap_intragroup_1899       ran     1 times; avg:     1430us; total:     1430us
+segred_small_1182            ran     1 times; avg:      164us; total:      164us
+39 operations with cumulative runtime:   9759us
+#+end_src
+
+So, there are some intragroup kernels that are not being run in the new
+version. Let's figure out what the tuning tree looks like:
+
+#+begin_src
+Threshold forest:
+("main.suff_outer_par_5",False)
+|
+`- ("main.suff_intra_par_6",False)
+   |
+   +- ("main.suff_intra_par_12",False)
+   |
+   +- ("main.suff_outer_par_10",False)
+   |
+   +- ("main.suff_outer_par_15",False)
+   |  |
+   |  `- ("main.suff_outer_par_16",False)
+   |
+   +- ("main.suff_outer_par_8",False)
+   |
+   `- ("main.suff_outer_par_9",False)
+#+end_src
+
+That's strange, it's not actually a list, but an actual tree. Shouldn't
+incremental flattening always produce a list?
+
+Anyway, there's something wrong with the autotuner. Here's the first few lines of
+debugging output:
+
+#+begin_src
+Tuning main.suff_intra_par_12 on entry point main and dataset data/sahara.in
+Running with options: -L --size=main.suff_intra_par_12=2000000000
+Running executable "./bfast" with arguments ["-L","--size=main.suff_intra_par_12=2000000000","-e","main","-t","/tmp/futhark-bench13235-0","-r","10","-b"]
+Got ePars:  8699904
+Trying e_pars [8699904]
+Running with options: -L --size=main.suff_intra_par_12=8699904
+Running executable "./bfast" with arguments ["-L","--size=main.suff_intra_par_12=8699904","-e","main","-t","/tmp/futhark-bench13235-1","-r","10","-b"]
+Tuning main.suff_outer_par_10 on entry point main and dataset data/sahara.in
+Running with options: -L --size=main.suff_outer_par_10=2000000000 --size=main.suff_intra_par_12=2000000000
+Running executable "./bfast" with arguments ["-L","--size=main.suff_outer_par_10=2000000000","--size=main.suff_intra_par_12=2000000000","-e","main","-t","/tmp/futhark-bench13235-2","-r","10","-b"]
+Got ePars:  543744
+Trying e_pars [543744]
+Running with options: -L --size=main.suff_outer_par_10=543744 --size=main.suff_intra_par_12=2000000000
+Running executable "./bfast" with arguments ["-L","--size=main.suff_outer_par_10=543744","--size=main.suff_intra_par_12=2000000000","-e","main","-t","/tmp/futhark-bench13235-3","-r","10","-b"]
+Tuning main.suff_outer_par_16 on entry point main and dataset data/sahara.in
+Running with options: -L --size=main.suff_outer_par_16=2000000000 --size=main.suff_outer_par_10=543744 --size=main.suff_intra_par_12=2000000000
+Running executable "./bfast" with arguments ["-L","--size=main.suff_outer_par_16=2000000000","--size=main.suff_outer_par_10=543744","--size=main.suff_intra_par_12=2000000000","-e","main","-t","/tmp/futhark-bench13235-4","-r","10","-b"]
+Got ePars:  4349952
+Trying e_pars [4349952]
+Running with options: -L --size=main.suff_outer_par_16=4349952 --size=main.suff_outer_par_10=543744 --size=main.suff_intra_par_12=2000000000
+Running executable "./bfast" with arguments ["-L","--size=main.suff_outer_par_16=4349952","--size=main.suff_outer_par_10=543744","--size=main.suff_intra_par_12=2000000000","-e","main","-t","/tmp/futhark-bench13235-5","-r","10","-b"]
+...
+#+end_src
+
+To tune correctly, we want to tune from the bottom of the tree upwards, but
+instead we start with ~suff_intra_par_12~ which is somewhere in the middle? Ah,
+I guess all that just stems from the fact that we're not actually tuning a list,
+but a tree.
+
+Here's the optimal tuning parameters that we'd like to see:
+
+#+begin_src
+main.suff_outer_par_5=2000000000
+main.suff_intra_par_6=20000000000
+main.suff_intra_par_12=20000000000
+main.suff_outer_par_10=2
+main.suff_outer_par_15=20000000000
+main.suff_outer_par_16=2
+main.suff_outer_par_8=2
+main.suff_outer_par_9=2000000000
+#+end_src
+
+Right off the bat, we can see that ~suff_outer_par_10~ is being tuned
+incorrectly. Instead of being set low (to 543744), it's being maxed out. Oh,
+perhaps the default tuning parameters are not high enough?
+
+It might also be that the default threshold is too small!
+
+Well, that's a task for tomorrow.
+
+* Tomorrow
+
+Continue with ~bfast~.
