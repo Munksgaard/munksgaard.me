@@ -38,7 +38,7 @@ close all open windows and programs when docking into my dock at DIKU. According
 to emersion on #sway it's
 
 #+begin_quote
-12:16:33   emersion | fixed in sway master                                                                                                                                                        │ artymort
+12:16:33   emersion | fixed in sway master \\
 12:17:15   emersion | this is a common dock issue caused by a rapid hotplug and unplug
 #+end_quote
 
