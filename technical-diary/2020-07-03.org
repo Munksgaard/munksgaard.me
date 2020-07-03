@@ -1,0 +1,99 @@
+#+TITLE: 2020-07-03
+#+DATE: <2020-07-03 Fri>
+
+* Yesterday, and the plan for today
+
+Yesterday, most of the time was spent on writing a retrospective on these
+technical diaary entries and on figuring out why ~bfast~ is slow. I'll continue
+with ~bfast~ today.
+
+* ~bfast~, continued
+
+So, it turns out that the default threshold was indeed too low. Before [[https://github.com/diku-dk/futhark/pull/1044][my
+changes]] the default threshold was 32768, but all the thresholds in ~bfast~ using
+the ~safari~ dataset exhibit degrees of parallelism higher than that. This means
+that when we're trying to tune eg. ~suff_outer_par_10~, the thresholds
+above (~suff_outer_par_5~) in the tuning tree evaluate to true, and the code
+versions guarded by ~suff_outer_par_10~ are never executed. That meant that the
+tuning results were completely random.
+
+Thankfully, we can alleviate this problem simply by setting the default
+threshold higher. Now, ~bfast~ executes as fast as before incremental
+flattening:
+
+#+begin_src
+$ futhark autotune --backend=opencl bfast.fut
+Compiling bfast.fut...
+Tuning main.suff_intra_par_12 on entry point main and dataset data/sahara.in
+Tuning main.suff_outer_par_10 on entry point main and dataset data/sahara.in
+Tuning main.suff_outer_par_16 on entry point main and dataset data/sahara.in
+Tuning main.suff_outer_par_15 on entry point main and dataset data/sahara.in
+Tuning main.suff_outer_par_8 on entry point main and dataset data/sahara.in
+Tuning main.suff_outer_par_9 on entry point main and dataset data/sahara.in
+Tuning main.suff_intra_par_6 on entry point main and dataset data/sahara.in
+Tuning main.suff_outer_par_5 on entry point main and dataset data/sahara.in
+Wrote bfast.fut.tuning
+Result of autotuning:
+main.suff_intra_par_12=2000000000
+main.suff_intra_par_6=3874176
+main.suff_outer_par_10=543744
+main.suff_outer_par_15=2000000000
+main.suff_outer_par_16=4349952
+main.suff_outer_par_5=2000000000
+main.suff_outer_par_8=28138752
+main.suff_outer_par_9=543744
+
+$ futhark bench --backend=opencl bfast.fut
+Compiling bfast.fut...
+Reporting average runtime of 10 runs for each dataset.
+
+Results for bfast.fut (using bfast.fut.tuning):
+data/sahara.in:       9308μs (RSD: 0.053; min:  -8%; max:  +5%)
+
+$ futhark-0.15.8 bench --backend=opencl --no-tuning bfast.fut
+Compiling bfast.fut...
+Reporting average runtime of 10 runs for each dataset.
+
+Results for bfast.fut:
+data/sahara.in:       9797μs (RSD: 0.005; min:  -0%; max:  +2%)
+#+end_src
+
+* Last-use
+
+Let's go back to last-use and see what we were up to before I went on vacation.
+
+The current status is that I have a very simple last-use analysis, which
+supports basic aliasing. Troels and Cosmin mentioned that the aliasing
+information provided by the aliasing library probably isn't sufficient, but I'm
+not quite sure why.
+
+I've also spent a bit of time investigating Cosmins implementation of
+last-use. The biggest difference from mine is that he introduces a new LastUse
+lore, such that all expressions are annotated with last-use information. He also
+implements last-use analysis himself, without using ~FreeIn~. As a result, he
+correctly finds last-use information within nested blocks even on the first
+run. However, I'm not sure that we need either the new lore or the nested
+information. My hope is that we can treat each block "separately".
+
+The next step is probably to start implementing the linear scan analysis?
+
+To remind myself, here's what we need to do:
+
+ - Walk through the program from top to bottom.
+ - Each time there is an allocation, do the following:
+   - Add any memory blocks/arrays past their last use since the last allocation
+     was performed to the free list. Also add size information.
+   - Look through the free list for a suitably sized block for the current
+     allocation. If one exists, use it instead (perhaps by inserting a simple
+     ~let new = previous~ statement), otherwise leave the allocation in place
+
+Sounds simple enough, really...
+
+Let's start by creating a new repository, copy over the last-use stuff and make
+our program do a ~Pass~ instead of an ~Action~.
+
+* Tomorrow
+
+Well, tomorrow is on Monday. But the plan is to continue with the linear-scan
+pass. I've started building the skeleton, and on Monday it'll need to be
+expanded to be a proper pass.
