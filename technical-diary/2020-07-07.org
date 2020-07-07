@@ -1,0 +1,298 @@
+#+TITLE: 2020-07-07
+#+DATE: <2020-07-07 Tue>
+
+* Yesterday, and the plan for today
+
+Yesterday I worked on the linear scan, but I didn't get very far. I'll continue
+today.
+
+* Linear Scan, part 2
+
+Okay, what is the problem I'm having?
+
+Consider the following program:
+
+#+begin_src futhark
+let psum = scan (+) 0
+
+let main (xss: [][]i32) =
+  map (psum >-> psum >-> psum)
+      xss
+#+end_src
+
+When compiled with ~futhark-0.16.1 dev --kernels -a~, we get the following
+intra-group version IR:
+
+#+begin_src futhark
+  let {i32 num_threads_766} = mul_nw32(impl₀_245, impl₁_246)
+  let {i64 binop_x_780} = sext i32 impl₀_245 to i64
+  let {i64 binop_y_781} = sext i32 impl₁_246 to i64
+  let {i64 binop_x_782} = mul_nw64(binop_x_780, binop_y_781)
+  let {i64 bytes_779} = mul_nw64(binop_x_782, 4i64)
+  let {mem mem_783} =
+    alloc(bytes_779)
+  -- res_409 : [impl₀_245][impl₁_246]i32@@mem_783->
+  -- {base: [impl₀_245, impl₁_246]; contiguous: True; LMADs: [{offset: 0i32;
+  --                                                           strides: [impl₁_246, 1i32];
+  --                                                           rotates: [0i32, 0i32];
+  --                                                           shape: [impl₀_245, impl₁_246];
+  --                                                           permutation: [0, 1];
+  --                                                           monotonicity: [Inc, Inc]}]}
+  let {[impl₀_245][impl₁_246]i32 res_409} =
+    segmap_group
+    (#groups=impl₀_245; groupsize=impl₁_246)
+    (gtid_292 < impl₀_245) (~phys_tid_305) : {[impl₁_246]i32} {
+      let {i32 num_threads_767} = mul_nw32(impl₀_245, impl₁_246)
+      let {i64 binop_x_769} = sext i32 impl₁_246 to i64
+      let {i64 bytes_768} = mul_nw64(binop_x_769, 4i64)
+      let {mem@local mem_770} =
+        alloc(bytes_768, @local)
+      -- resarr0_416 : [impl₁_246]i32@@mem_770->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_416} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_417, i32 x_418) =>
+            let {i32 res_419} = add32(x_417, x_418)
+            in {res_419}})
+        (gtid_295 < impl₁_246) (~phys_tid_296) : {i32} {
+          let {i32 x_420} = xss_247[gtid_292, gtid_295]
+          return {returns x_420}
+        }
+      let {i32 num_threads_771} = mul_nw32(impl₀_245, impl₁_246)
+      let {i64 binop_x_773} = sext i32 impl₁_246 to i64
+      let {i64 bytes_772} = mul_nw64(binop_x_773, 4i64)
+      let {mem@local mem_774} =
+        alloc(bytes_772, @local)
+      -- resarr0_426 : [impl₁_246]i32@@mem_774->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_426} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_427, i32 x_428) =>
+            let {i32 res_429} = add32(x_427, x_428)
+            in {res_429}})
+        (gtid_297 < impl₁_246) (~phys_tid_298) : {i32} {
+          let {i32 x_430} = resarr0_416[gtid_297]
+          return {returns x_430}
+        }
+      let {i32 num_threads_775} = mul_nw32(impl₀_245, impl₁_246)
+      let {i64 binop_x_777} = sext i32 impl₁_246 to i64
+      let {i64 bytes_776} = mul_nw64(binop_x_777, 4i64)
+      let {mem@local mem_778} =
+        alloc(bytes_776, @local)
+      -- resarr0_435 : [impl₁_246]i32@@mem_778->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_435} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_436, i32 x_437) =>
+            let {i32 res_438} = add32(x_436, x_437)
+            in {res_438}})
+        (gtid_299 < impl₁_246) (~phys_tid_300) : {i32} {
+          let {i32 x_439} = resarr0_426[gtid_299]
+          return {returns x_439}
+        }
+      return {returns resarr0_435}
+    }
+  in {mem_783, res_409}
+#+end_src
+
+Here, each ~segscan_thread~ corresponds to an invocation of ~psum~ in the
+~map~. You'll note that the memory block ~mem_770~ and its associated array
+~resarr0_416~ are not used after the second segscan_thread. This means that we
+could get rid of the allocation of ~mem_778~ and instead use ~mem_770~ for
+~resarr0_435~. So the resulting code should either look like this:
+
+#+begin_src futhark
+  ...
+  let {mem@local mem_778} =
+    mem_770
+  -- resarr0_435 : [impl₁_246]i32@@mem_778->
+  -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+  --                                                rotates: [0i32];
+  --                                                shape: [impl₁_246];
+  --                                                permutation: [0];
+  --                                                monotonicity: [Inc]}]}
+  let {[impl₁_246]i32 resarr0_435} =
+    ...
+#+end_src
+
+Or like this:
+
+#+begin_src futhark
+  ...
+  -- resarr0_435 : [impl₁_246]i32@@mem_770->
+  -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+  --                                                rotates: [0i32];
+  --                                                shape: [impl₁_246];
+  --                                                permutation: [0];
+  --                                                monotonicity: [Inc]}]}
+  let {[impl₁_246]i32 resarr0_435} =
+    ...
+#+end_src
+
+I'm not quite sure which is best. I'm not even sure how we know what memory
+block ~resarr0_434~ resides in, or how to change that...
+
+A complicating matter here, is that my last-use analysis doesn't correctly see
+that a use of an array is also a use of the underlying memory allocation. For
+instance, if ~resarr0_415~ is used later on, the last-use reported for ~mem_889~
+would still be the line where ~resarr0_415~ is initialized.
+
+Okay, Troels says that it doesn't matter. If we do the first thing, it's going
+to be simplified into the second thing.
+
+Cosmin suggested that I present some pseudocode so we can look at it
+together. In particular, he's interested in what data structures and such I
+think I need.
+
+I've been banging on some code both today and yesterday, but I think I need to
+step back a bit and try to get a better understanding of what I need. Let's
+start with the brief description from last Friday and see if we can expand on it
+a bit:
+
+ - Walk through the program from top to bottom.
+ - Each time there is an allocation, do the following:
+   - Add any memory blocks/arrays past their last use since the last allocation
+     was performed to the free list. Also add size information.
+   - Look through the free list for a suitably sized block for the current
+     allocation. If one exists, use it instead (perhaps by inserting a simple
+     ~let new = previous~ statement), otherwise leave the allocation in place
+
+We also want to look at each statement, in order to determine whether the
+pattern uses one of the blocks allocated so far.
+
+So, for statements that are not allocs, analyse each element in the pattern
+to see if it lies in a memory block. If so, save the pair (Array VName, Memory
+block VName, size). Of course, we need to take into account aliasing of the
+VName.
+
+Perhaps it is easier to apply the array as an alias to the memory block? No,
+aliases work the other way around. However, we could apply the memory block as
+an alias to the array. But I don't know if that would do us any good...
+
+Okay, what do we do when we encounter a statement like this:
+
+#+begin_src futhark
+  -- resarr0_416 : [impl₁_246]i32@@mem_770->
+  -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+  --                                                rotates: [0i32];
+  --                                                shape: [impl₁_246];
+  --                                                permutation: [0];
+  --                                                monotonicity: [Inc]}]}
+  let {[impl₁_246]i32 resarr0_416} =
+    segscan_thread ...
+#+end_src
+
+We have already seen the allocation of ~mem_770~, so we know the ~SubExp~
+determining its size. Now we also know that ~mem_770~ is used for the array
+~resarr0_416~. With last-use analysis, we can also know when ~resarr0_416~ is no
+longer used, but only if the proper aliasing information has been applied. So,
+in principle, we could add ~(mem_770, size, i)~ to our freelist, meaning that
+the memory block ~mem_770~ of size ~size~ is free after line ~i~.
+
+Then, when we come upon an alloc of size ~s~ on line ~j~, if ~j >= i && s <=
+size~, replace the alloc with a simple ~let new = mem_770~.
+
+** What about blocks
+
+We need to recursive into blocks somehow. However, the freelist we have (which
+uses statement numbers of the surrounding code) doesn't work in here. We don't
+know what line of code we're on in the surrounding context, and our free list of
+~(VName, SubExp, Int)~ doesn't have the necessary information. Maybe we can use
+some sort of ~Path = [Int]~ to describe the path to the current location in the
+code? For instance ~[2, 10, 1]~ would indicate that we're on statement 2 within
+the block starting in statement 10 within the block starting on statement 1 in
+the outermost context. Maybe that could work for simple blocks, but it's not a
+unique path descriptor for statements containing ~if~ expressions, since they
+have two blocks/branches within one statement.
+
+Another idea is to bring in the freelist, but reset the line numbers
+somehow. For instance, in the ~then~ branch of an ~if~ expression, we're only
+interested in the elements of the outside freelist that are free /before/ the
+~if~. We can initialise a new freelist inside the ~if~ branches with the statement
+number of those memory blocks set to 0 or -1. They are then free to be used within the
+branch. However, we also need to perform last-use and aliasing analysis within
+the new branch, and possibly extend the lifetime (change the statement number) of
+some of those memory blocks that we brought in.
+
+When returning from the branch, it's possible that we have to extend the
+lifetime of some memory blocks that were used within. For instance, ~mem_123~
+was free when entering the ~if~ statement, but now it is used within the ~then~
+branch. The pass on the ~then~ branch returns the updated statements, but maybe also
+the freelist? How do we use that freelist to update the surrounding freelist?
+Let's try to write out an example.
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let mem_1 = alloc(42)                                             -- ref:alloc1
+  let arr1@mem_1 = ...                                                -- ref:arr1
+
+  let x = reduce (+) 0 arr1                                            -- ref:red
+
+  let (mem_2, arr2@mem_2) =                                           -- ref:arr2
+    if ... then
+      let mem_then = alloc(42)                                  -- ref:then-alloc
+      let res_then@mem_then = map (* 2) (iota 42)                 -- ref:then_res
+      in (mem_then, res_then)
+    else
+      let mem_else = alloc(x)                                   -- ref:else-alloc
+      let res_else = map (* 2) (iota x)
+      in (mem_then, res_else)
+#+end_src
+
+So, ~mem_1~ is not used after line [[(red)]], but the then branch of the if
+statement allocates a new array of the exact same size as ~arr1~, and could
+therefore reuse ~mem_1~. We cannot say anything about the else-branch, so in
+that case we probably need to leave the allocation as it is.
+
+I need to remember that the result of a body (like the body of the then-branch)
+is not actually part of the statements, but a separate set of values.
+
+So, when allocating ~mem_1~ on line [[(alloc1)]], we save the name and size in an
+~allocs~ list. Then, when reaching the creation of ~arr1~ on line [[(arr1)]], we add
+the last-use number of arr1 (2 in this case, since the statement on line [[(red)]] has index
+2 in the list of statements) and the size and name of the memory block to the
+freelist. The free-list now contains ~(mem_1, 42, 2)~.
+
+When reaching the creation of ~arr2~ in the statement on line [[(arr2)]], we create
+a new free-list containing ~(mem_1, 42, 0)~, because ~mem_1~ is free to be used
+inside the branches. Upon reaching line [[(then-alloc)]], we see that there is
+already a free allocation with the desired size, so we replace the line with
+~let mem_then = mem_1~. Then, we update the allocs so it contains ~(mem_then,
+42)~. On the next line, line [[(then_res)]], we update the free-list to contain the
+last-use of ~res~.
+
+Now the question is, what useful information can we return to the outside
+function?
+
+Will it make it easier to handle blocks like this if I rewrote ~lastUses~ to apply
+to a ~Body~ instead?
+
+Perhaps Cosmins idea of a ~LastUses~ lore isn't so bad? Maybe it would be easier
+to walk through the program and keep track of the freelist using such a lore? I
+would still need a mapping from array to memory block to know which memory
+blocks are free (since I don't think his ~LastUses~ lore does a better job than
+my last-use analysis, but I may be wrong). However, I'm only really interested
+in last-uses of memory blocks (though that necessitates keeping track of the
+corresponding arrays).
+
+I'll need to think about this more tomorrow.
