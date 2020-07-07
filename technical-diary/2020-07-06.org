@@ -1,0 +1,12 @@
+#+TITLE: 2020-07-06
+#+DATE: <2020-07-06 Mon>
+
+* Yesterday, and the plan for today
+
+I got started with the linear scan pass last Friday, so today the plan is to
+continue fleshing out the skeleton. I'll probably run into problems pretty
+quickly, but we'll see how it goes.
+
+* Linear Scan
+
+Eh, lots of writing and rewriting. I'll try to document more tomorrow.
