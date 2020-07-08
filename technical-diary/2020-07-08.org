@@ -1,0 +1,50 @@
+#+TITLE: 2020-07-08
+#+DATE: <2020-07-08 Wed>
+
+* Yesterday, and the plan for today
+
+After spending a long time just banging at the code, I ended the day yesterday
+by stepping back and trying about how best to tackle the linear scan more
+generally. Let's continue in that same vein today.
+
+* Last-use
+
+Yesterday, my train of thought stopped with the idea of managing a freelist that
+contains a triple of memory block name, last-use statement number, and size. The
+problem was, how do I update this freelist when returning from a block like a
+then-branch inside an if expression?
+
+If, instead of using line numbers to indicate when an alloation is free, I
+instead use the last-use lore that Cosmin created, perhaps I could see for each
+branch, that a particular mem is not being used inside, but last used in the
+outer expression. That would allow me to add that mem to the freelist of that
+branch. The result of running ~reuseAllocations~ on a branch would be the list
+of free allocations at the end of that branch? If some mem is reused inside the
+branch and returned from it, the free-list should be updated to no longer
+contain that mem. If a new mem is created and is past its last-use inside the
+branch, the free-list should also contain that new mem (even though it's out of
+scope outside the branch? Yes, because the allocation is moved to the top of the
+kernel, so it should be in scope). If some existing mem is not reused, it should
+also be in the resulting free-list. That means we can just return the free-list
+from the branch and intersect it with the free-list from the other branch?
+
+But, the names have now changed! In the [[file:2020-07-07.org::if-ex][example from yesterday]], ~mem_2~ aliases
+~mem_1~. Maybe it even consumes it? Ah, but ~mem_1~ is no longer free, so it's
+not returned. Now, ~mem_2~ is allocated and whenever it is closed, we add it to
+the free-list? That seems like a simpler way to go. However, how do we keep
+track of the size of ~mem_2~? In the example from yesterday, the size of ~arr_2~
+(the array which resides in ~mem_2~) will be existentialized and returned along
+with ~mem_2~ and ~arr_2~.
+
+Perhaps it's easier if we don't keep track of allocations of mem, but only just
+do something whenever an array is last-used? Then we can look up the size of the
+array and the mem used and add it to the free list? But what if the array is
+aliased by another array? Does the ~LastUses~ lore take care of that?
+
+I think it's time I try to make Cosmins code work, and see how it handles cases
+like the above aliasing. Or maybe I need to write my own lore? Let's try with
+his first.
+
+Well, I got stuck on Cosmins code and decided to try to implement the lore
+myself. It's more complicated than my last-use analysis, so it's going to take
+some time... That's it for today though, see you tomorrow.
