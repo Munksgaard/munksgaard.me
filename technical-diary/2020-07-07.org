@@ -215,8 +215,8 @@ size~, replace the alloc with a simple ~let new = mem_770~.
 
 ** What about blocks
 
-We need to recursive into blocks somehow. However, the freelist we have (which
-uses statement numbers of the surrounding code) doesn't work in here. We don't
+We need to recurse into blocks somehow. However, the freelist we have (which
+uses statement numbers of the surrounding code) doesn't work in there. We don't
 know what line of code we're on in the surrounding context, and our free list of
 ~(VName, SubExp, Int)~ doesn't have the necessary information. Maybe we can use
 some sort of ~Path = [Int]~ to describe the path to the current location in the
@@ -242,6 +242,7 @@ branch. The pass on the ~then~ branch returns the updated statements, but maybe 
 the freelist? How do we use that freelist to update the surrounding freelist?
 Let's try to write out an example.
 
+#+NAME: if-ex
 #+begin_src futhark -n -r -l "-- ref:%s"
   let mem_1 = alloc(42)                                             -- ref:alloc1
   let arr1@mem_1 = ...                                                -- ref:arr1
