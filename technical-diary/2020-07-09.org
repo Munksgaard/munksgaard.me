@@ -1,0 +1,183 @@
+#+TITLE: 2020-07-09
+#+DATE: <2020-07-09 Thu>
+
+* Yesterday, and the plan for today
+
+Yesterday I spent some more time trying to think about how best to do the linear
+scan. I ended up wanting to rewrite Cosmins last-use analysis and use that
+instead of my own last-use analysis, because having last-use information
+attached to each expression/block seems more useful than just having a list of
+line-numbers. The plan is to continute that implementation today.
+
+However, Cosmin has also written an email stating that ~driver-knn.fut~ is not
+being tuned correctly with my new autotuner. I'll have to look in to that first.
+
+* ~driver-knn.fut~
+
+Let's try to run the benchmark using a few different version of the compiler.
+
+#+begin_src
+$ futhark-0.15.8 bench --backend=opencl driver-knn.fut
+Compiling driver-knn.fut...
+Reporting average runtime of 10 runs for each dataset.
+
+Results for driver-knn.fut:
+256i32 [2097152][7]f32 [10000000][7]f32:    2817820μs (RSD: 0.003; min:  -0%; max:  +1%)
+
+[jxk588@a00333 knn-by-kdtree]$ futhark-0.16.1 bench --backend=opencl driver-knn.fut
+Compiling driver-knn.fut...
+Reporting average runtime of 10 runs for each dataset.
+
+Results for driver-knn.fut:
+256i32 [2097152][7]f32 [10000000][7]f32:    4680997μs (RSD: 0.026; min:  -3%; max:  +5%)
+
+Results for driver-knn.fut:
+256i32 [2097152][7]f32 [10000000][7]f32:    4680997μs (RSD: 0.026; min:  -3%; max:  +5%)
+[jxk588@a00333 knn-by-kdtree]$ futhark-0.16.1 autotune --backend=opencl driver-knn.fut
+Compiling driver-knn.fut...
+Tuning main.suff_outer_par_0 on entry point main and dataset 256i32 [2097152][7]f32 [10000000][7]f32
+Tuning main.suff_outer_par_1 on entry point main and dataset 256i32 [2097152][7]f32 [10000000][7]f32
+Tuning main.suff_outer_par_2 on entry point main and dataset 256i32 [2097152][7]f32 [10000000][7]f32
+Tuning main.suff_intra_par_7 on entry point main and dataset 256i32 [2097152][7]f32 [10000000][7]f32
+Tuning main.suff_intra_par_4 on entry point main and dataset 256i32 [2097152][7]f32 [10000000][7]f32
+Tuning main.suff_outer_par_3 on entry point main and dataset 256i32 [2097152][7]f32 [10000000][7]f32
+Tuning main.suff_outer_redomap_15 on entry point main and dataset 256i32 [2097152][7]f32 [10000000][7]f32
+Wrote driver-knn.fut.tuning
+Result of autotuning:
+main.suff_intra_par_4=2097152
+main.suff_intra_par_7=2000000000
+main.suff_outer_par_0=2000000000
+main.suff_outer_par_1=7
+main.suff_outer_par_2=2000000000
+main.suff_outer_par_3=2000000000
+main.suff_outer_redomap_15=10248
+
+[jxk588@a00333 knn-by-kdtree]$ futhark-0.16.1 bench --backend=opencl driver-knn.fut
+Compiling driver-knn.fut...
+Reporting average runtime of 10 runs for each dataset.
+
+Results for driver-knn.fut (using driver-knn.fut.tuning):
+256i32 [2097152][7]f32 [10000000][7]f32:    4688262μs (RSD: 0.027; min:  -4%; max:  +6%)
+#+end_src
+
+That took a looooong time... But the tuning results seem to at least match the
+performance of the untuned program. However, it's significantly slower than the
+0.15.8 version.
+
+Troels suggests I not worry about the regression from 0.15.8, so I've sent
+Cosmin an e-mail asking for his tuning parameters. He got
+
+#+begin_src
+main.suff_intra_par_4=2000000000
+main.suff_intra_par_7=2097152
+main.suff_outer_par_0=2000000000
+main.suff_outer_par_1=2000000000
+main.suff_outer_par_2=2000000000
+main.suff_outer_par_3=2000000000
+main.suff_outer_redomap_15=5615445
+#+end_src
+
+I need to test his numbers on gpu04, but someone else is using the machine right
+now. It would be nice to figure out which of the two parameters are causing the
+problem.
+
+
+* Last-use
+
+Do I really need to use the ~LastUses~ lore? Why do I think I need it? I think I
+need it because it would make it easier to handle blocks. Here's the example
+from the other day:
+
+#+NAME: if-ex
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let mem1 = alloc(42)
+  -- last-use: []
+  let arr1@mem1 = ...
+
+  let x = reduce (+) 0 arr1
+
+  let (mem2, arr2@mem2) =
+    if ... then
+      let mem_then = alloc(42)
+      let res_then@mem_then = map (* 2) (iota 42)
+      in (mem_then, res_then)
+    else
+      let mem_else = alloc(x)
+      let res_else = map (* 2) (iota x)
+      in (mem_then, res_else)
+#+end_src
+
+And this is what it is transformed to:
+
+#+NAME: if-ex
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let mem1 = alloc(42)
+  -- freelist: []
+  let arr1@mem1 = ...             -- ref:arr1
+  -- freelist: []
+
+  let x = reduce (+) 0 arr1       -- ref:reduce1
+  -- last-use is [arr1, mem1], freelist: [(mem1, 42)]
+
+  let (mem2, arr2@mem2) =
+    if ... then
+      -- mem1 is free and of size 42, so we use that instead of allocing
+      let mem_then = mem1
+      -- freelist is now []
+      let res_then@mem_then = map (* 2) (iota 42)
+      in (mem_then, res_then)
+      -- also return freelist = []
+    else
+      let mem_else = alloc(x)
+      let res_else = map (* 2) (iota x)
+      in (mem_then, res_else)
+      -- also return freelist = [(mem1, 42)]
+  -- freelist after if = []
+  ...
+
+  let y = reduce (+) 0 arr2
+  -- last-use is [arr2, mem2], freelist = [(mem2, ext)], cannot be reused
+#+end_src
+
+We could do something similar using the line counts, I guess? But this is so
+simple and straightforward, I think it's worth writing a more complicated
+LastUse lore for it.
+
+There's one problem however: the last-use of ~mem1~ isn't actually on line
+[[(reduce1)]], but on line [[(arr1)]].
+
+Wait, we /can/ do the same thing rather simply by using the line count, right?
+Just have the last-uses sorted by line, pop things off the front, populate the
+freelist as required? Then, inside each block, we call last-uses before
+proceeding with the linear scan?
+
+Also, we should rewrite last-uses to work on ~Body~ instead, so we can remove
+last-use entries for things that are returned by the body.
+
+** Some time later
+
+I think I have a better skeleton now. However, when adding new elements to my
+free-list, I need to find the size of the thing I'm adding. I should probably
+also filter it so I only add mems (but only through their associated
+array). Afterwards, I can add to lookup to the alloc handling part of the code.
+
+** A long meeting later
+
+I did get a bit further, and now the code is available [[https://github.com/Munksgaard/futhark-linear-scan][here]].
+
+The problem that I have right now, is that I cannot perform the memory lookup
+on [[https://github.com/Munksgaard/futhark-linear-scan/blob/master/ReuseAllocations.hs#L89][line 89]] without introducing some scope. Troels has the following advise:
+
+#+begin_src
+15:20:50   munksgaard | Athas: In a Pass, I'm walking through statements using foldM, collecting information along the way. At some point, I come along a VName, and now I want
+                      | to look up the memory information of that VName, can I use lookupMemInfo somehow? That requires me to handle scope, right? Is there a better way?
+15:22:45        Athas | munksgaard: you almost always need to keep a Scope around somehow.
+15:29:31   munksgaard | Sure, I'm just confused as to how to apply it. Here's the code I have, and the line that's giving me problems:
+                      | https://github.com/Munksgaard/futhark-linear-scan/blob/master/ReuseAllocations.hs#L89
+15:30:23   munksgaard | I guess the scope information needs to be available somehow, but I don't know how to introduce it/keep track of it
+15:30:42        Athas | You either do it manually by adding a Scope parameter to all your functions, or you use a Reader monad that contains a Scope.
+15:31:45        Athas | Like how I do it here: https://github.com/diku-dk/futhark/blob/bee7823271bea5b407dd7eea69ebaf9b1b6b28c3/src/Futhark/Optimise/Unstream.hs#L43
+15:33:50   munksgaard | I see, that's very helpful. Thank you.
+#+end_src
+
+I'll have to try that tomorrow.
