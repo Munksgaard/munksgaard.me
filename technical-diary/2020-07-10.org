@@ -36,7 +36,7 @@ for us.
 So, I got my basic pass to work today! Here's the result of a run (with
 debugging output):
 
-#+begin_src
+#+begin_example -n -r
 $ cabal exec futhark-linear-scan -- tests/arrays2.fut  2>&1
 Warning at tests/arrays2.fut:1:11-11:
   Unused variable "n".
@@ -293,15 +293,15 @@ entry {i32} main (i32 n_186) = {
   in {res_223}
 }
 
-#+end_src
+#+end_example
 
-As you can see on line [[(ref:mem_263)]], it succesfully changes the allocation to
+As you can see on line [[(mem_263)]], it succesfully changes the allocation to
 reuse an existing allocation! Unfortunately, my last-use analysis is far too
 simple, even with aliasing. From the debugging output, we can see that ~mem_260~
-is reported as being last-used on line [[(ref:xs_187)]], when in reality it is used
+is reported as being last-used on line [[(xs_187)]], when in reality it is used
 by all references to ~xs_187~. Furthermore, even if we fixed that so the
 last-use of ~mem_260~ was equal to the last-use of ~xs_187~, that happens
-immediately after, on line [[(ref:xs_188)]], but that's still not the actual
+immediately after, on line [[(xs_188)]], but that's still not the actual
 last-use of ~mem_260~: ~res_187~  is consumed in the update which creates
 ~res_188~, which still resides in ~mem_260~.
 
