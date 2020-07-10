@@ -1,0 +1,314 @@
+#+TITLE: 2020-07-10
+#+DATE: <2020-07-10 Fri>
+
+* Yesterday, and the plan for today
+
+I got a better start on the linear scan pass yesterday. I decided to use my old
+last-use implementation for now, since it should work alright. Later, I might
+want to have a ~LastUse~ lore anyway, but I'll try to get it to work without
+first.
+
+Today, I have to continue writing my pass. In particular, I need to get my
+~lookupMemInfo~ to work. That requires adding scoping.
+
+* Chess/perft
+
+I ran across an interesting chess problem that we might be able to use as a
+benchmark. [[https://www.chessprogramming.org/Perft][perft]] is a performance test and move path enumeration that is used to
+determine the number of legal moves in a given chess position. It seems like
+GPUs have successfully been used for estimating this number up to ~perft(15)~,
+possibly using Monte Carlo situation. It would be interesting to look into and
+understand the test, and see if we can write a Futhark program that computes it
+for us.
+
+** Some resources
+
+ - [[https://www.chessprogramming.org/Perft][Perft on Chess Programming Wiki]]
+ - [[https://www.chessprogramming.org/Perft_Results][Perft results (to validate against)]]
+ - [[https://027cfdf8-a-62cb3a1a-s-sites.googlegroups.com/site/dshawul/perft.pdf?attachauth=ANoY7coUbOJItf4mD8WCfHRVyByhTHfT81PO4mDa_qootnhDWEBgdH8KLfO4cooxawnqZx-OlmWKJ2pMErtYTn87Lnjl_Ezl-fH1r_jDk6tNrRcD-6A4igqyFYegABWoYlBS-bzM8m3XMjPZ6rxMlbiAfPGDRAqxALE94Vg3utrDNWazyw_wsbjE4brPYYRkwJVTuWsjZNeb&attredirects=0][Monte Carlo methods for estimating game tree size]]
+ - [[https://github.com/ankan-ban/perft_gpu][An implementation of perft for CUDA]]
+ - [[http://www.talkchess.com/forum3/viewtopic.php?f=7&t=47740][Discussion of how to compute ~perft(15)~]]
+ - [[http://talkchess.com/forum3/viewtopic.php?f=7&t=63346][Generating moves on GPU in parallel]]
+ - [[http://indriid.com/2019/2019-01-06-tinsmith.pdf][Using a GPU for a chess engine]]
+
+* ReuseAllocs
+
+So, I got my basic pass to work today! Here's the result of a run (with
+debugging output):
+
+#+begin_src
+$ cabal exec futhark-linear-scan -- tests/arrays2.fut  2>&1
+Warning at tests/arrays2.fut:1:11-11:
+  Unused variable "n".
+stms:
+
+last_uses?: []
+allocs:
+[]
+frees:
+[]
+last_uses:
+[]
+
+stms:
+(0, let {mem mem_260} = alloc(40i64))
+(1, -- res_187 : [10i32]i32@@mem_260->
+    -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                            rotates: [0i32]; shape: [10i32];
+    --                                            permutation: [0];
+    --                                            monotonicity: [Inc]}]}
+ let {[10i32]i32 res_187} = iota32(10i32, 0i32, 1i32))
+(2, -- xs_188 : [10i32]i32@@mem_260->
+    -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                            rotates: [0i32]; shape: [10i32];
+    --                                            permutation: [0];
+    --                                            monotonicity: [Inc]}]}
+ let {[10i32]i32 xs_188} = res_187 with [1i32] <- 0i32)
+(3, let {mem mem_263} = alloc(40i64))
+(4, -- res_189 : [10i32]i32@@mem_263->
+    -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                            rotates: [0i32]; shape: [10i32];
+    --                                            permutation: [0];
+    --                                            monotonicity: [Inc]}]}
+ let {[10i32]i32 res_189} = iota32(10i32, 0i32, 1i32))
+(5, -- ys_190 : [10i32]i32@@mem_263->
+    -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                            rotates: [0i32]; shape: [10i32];
+    --                                            permutation: [0];
+    --                                            monotonicity: [Inc]}]}
+ let {[10i32]i32 ys_190} = res_189 with [1i32] <- 0i32)
+(6, let {i32 segred_group_size_227} =
+      get_size(segred_group_size_226, group_size))
+(7, let {i32 num_groups_229} =
+      calc_num_groups(10i64, segred_num_groups_228, segred_group_size_227))
+(8, let {mem mem_267} = alloc(4i64))
+(9, -- acc0_231 : [1i32]i32@@mem_267->
+    -- {base: [1i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                           rotates: [0i32]; shape: [1i32];
+    --                                           permutation: [0];
+    --                                           monotonicity: [Inc]}]}
+ let {[1i32]i32 acc0_231} =
+   segred_thread
+   (#groups=num_groups_229; groupsize=segred_group_size_227)
+   ({{0i32},
+     [],
+     commutative fn {i32} (i32 x_201, i32 x_202) =>
+       let {i32 res_203} = add32(x_201, x_202)
+       in {res_203}})
+   (dummy_232 < 1i32, gtid_233 < 10i32) (~phys_tid_234) : {i32} {
+     let {i32 x_204} = xs_188[gtid_233]
+     return {returns x_204}
+   })
+(10, let {i32 acc0_200} = acc0_231[0i32])
+(11, let {i32 segscan_group_size_238} =
+       get_size(segscan_group_size_237, group_size))
+(12, let {i32 num_groups_240} =
+       calc_num_groups(10i64, segscan_num_groups_239, segscan_group_size_238))
+(13, let {mem mem_271} = alloc(40i64))
+(14, -- resarr0_206 : [10i32]i32@@mem_271->
+     -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+     --                                            rotates: [0i32]; shape: [10i32];
+     --                                            permutation: [0];
+     --                                            monotonicity: [Inc]}]}
+ let {[10i32]i32 resarr0_206} =
+   segscan_thread
+   (#groups=num_groups_240; groupsize=segscan_group_size_238)
+   ({{0i32},
+     [],
+     fn {i32} (i32 x_207, i32 x_208) =>
+       let {i32 res_209} = add32(x_207, x_208)
+       in {res_209}})
+   (gtid_242 < 10i32) (~phys_tid_243) : {i32} {
+     let {i32 x_210} = ys_190[gtid_242]
+     return {returns x_210}
+   })
+(15, let {i32 segred_group_size_247} =
+       get_size(segred_group_size_246, group_size))
+(16, let {i32 num_groups_249} =
+       calc_num_groups(10i64, segred_num_groups_248, segred_group_size_247))
+(17, let {mem mem_275} = alloc(4i64))
+(18, -- acc0_251 : [1i32]i32@@mem_275->
+     -- {base: [1i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+     --                                           rotates: [0i32]; shape: [1i32];
+     --                                           permutation: [0];
+     --                                           monotonicity: [Inc]}]}
+ let {[1i32]i32 acc0_251} =
+   segred_thread
+   (#groups=num_groups_249; groupsize=segred_group_size_247)
+   ({{0i32},
+     [],
+     commutative fn {i32} (i32 x_217, i32 x_218) =>
+       let {i32 res_219} = add32(x_217, x_218)
+       in {res_219}})
+   (dummy_252 < 1i32, gtid_253 < 10i32) (~phys_tid_254) : {i32} {
+     let {i32 x_220} = resarr0_206[gtid_253]
+     return {returns x_220}
+   })
+(19, let {i32 acc0_216} = acc0_251[0i32])
+(20, let {i32 res_223} = add32(acc0_200, acc0_216))
+
+last_uses?: [(2, res_187), (2, mem_260), (5, res_189), (5, mem_263), (9, xs_188), (9,
+                                                                       segred_group_size_227),
+ (9, num_groups_229), (9, gtid_233), (9, mem_267), (10, acc0_231), (14, ys_190),
+ (14, segscan_group_size_238), (14, num_groups_240), (14, gtid_242), (14,
+                                                                      mem_271),
+ (18, resarr0_206), (18, segred_group_size_247), (18, num_groups_249), (18,
+                                                                        gtid_253),
+ (18, mem_275), (19, acc0_251), (20, acc0_200), (20, acc0_216)]
+1 adding new frees: []
+2 adding new frees: [(VName (Name "mem") 260,Constant (IntValue (Int64Value 40)))]
+3 lookup: 40i64
+3 found a result: VName (Name "mem") 260
+4 adding new frees: []
+5 adding new frees: []
+6 adding new frees: []
+7 adding new frees: []
+8 lookup: 4i64
+9 adding new frees: [(VName (Name "mem") 260,Constant (IntValue (Int64Value 40)))]
+10 adding new frees: [(VName (Name "mem") 267,Constant (IntValue (Int64Value 4)))]
+11 adding new frees: []
+12 adding new frees: []
+13 lookup: 40i64
+13 found a result: VName (Name "mem") 260
+14 adding new frees: []
+15 adding new frees: []
+16 adding new frees: []
+17 lookup: 4i64
+17 found a result: VName (Name "mem") 267
+18 adding new frees: []
+19 adding new frees: []
+20 adding new frees: []
+allocs:
+[(VName (Name "mem") 267,Constant (IntValue (Int64Value 4))),(VName (Name "mem") 260,Constant (IntValue (Int64Value 40)))]
+frees:
+[(VName (Name "mem") 267,Constant (IntValue (Int64Value 4))),(VName (Name "mem") 260,Constant (IntValue (Int64Value 40))),(VName (Name "mem") 260,Constant (IntValue (Int64Value 40)))]
+last_uses:
+[]
+
+entry {i32} main (i32 n_186) = {
+  let {mem mem_260} =
+    alloc(40i64)
+  -- res_187 : [10i32]i32@@mem_260->
+  -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+  --                                            rotates: [0i32]; shape: [10i32];
+  --                                            permutation: [0];
+  --                                            monotonicity: [Inc]}]}
+  let {[10i32]i32 res_187} = iota32(10i32, 0i32, 1i32)               (ref:xs_187)
+  -- xs_188 : [10i32]i32@@mem_260->
+  -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+  --                                            rotates: [0i32]; shape: [10i32];
+  --                                            permutation: [0];
+  --                                            monotonicity: [Inc]}]}
+  let {[10i32]i32 xs_188} =
+    -- Consumes res_187
+    res_187 with [1i32] <- 0i32                                      (ref:xs_188)
+  -- mem_263 aliases mem_260
+  let {mem mem_263} = mem_260                                        (ref:mem_263)
+  -- res_189 : [10i32]i32@@mem_263->
+  -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+  --                                            rotates: [0i32]; shape: [10i32];
+  --                                            permutation: [0];
+  --                                            monotonicity: [Inc]}]}
+  let {[10i32]i32 res_189} = iota32(10i32, 0i32, 1i32)
+  -- ys_190 : [10i32]i32@@mem_263->
+  -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+  --                                            rotates: [0i32]; shape: [10i32];
+  --                                            permutation: [0];
+  --                                            monotonicity: [Inc]}]}
+  let {[10i32]i32 ys_190} =
+    -- Consumes res_189
+    res_189 with [1i32] <- 0i32
+  let {i32 segred_group_size_227} =
+    get_size(segred_group_size_226, group_size)
+  let {i32 num_groups_229} =
+    calc_num_groups(10i64, segred_num_groups_228, segred_group_size_227)
+  let {mem mem_267} =
+    alloc(4i64)
+  -- acc0_231 : [1i32]i32@@mem_267->
+  -- {base: [1i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+  --                                           rotates: [0i32]; shape: [1i32];
+  --                                           permutation: [0];
+  --                                           monotonicity: [Inc]}]}
+  let {[1i32]i32 acc0_231} =
+    segred_thread
+    (#groups=num_groups_229; groupsize=segred_group_size_227)
+    ({{0i32},
+      [],
+      commutative fn {i32} (i32 x_201, i32 x_202) =>
+        let {i32 res_203} = add32(x_201, x_202)
+        in {res_203}})
+    (dummy_232 < 1i32, gtid_233 < 10i32) (~phys_tid_234) : {i32} {
+      let {i32 x_204} = xs_188[gtid_233]
+      return {returns x_204}
+    }
+  let {i32 acc0_200} = acc0_231[0i32]
+  let {i32 segscan_group_size_238} =
+    get_size(segscan_group_size_237, group_size)
+  let {i32 num_groups_240} =
+    calc_num_groups(10i64, segscan_num_groups_239, segscan_group_size_238)
+  -- mem_271 aliases mem_260
+  let {mem mem_271} = mem_260
+  -- resarr0_206 : [10i32]i32@@mem_271->
+  -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+  --                                            rotates: [0i32]; shape: [10i32];
+  --                                            permutation: [0];
+  --                                            monotonicity: [Inc]}]}
+  let {[10i32]i32 resarr0_206} =
+    segscan_thread
+    (#groups=num_groups_240; groupsize=segscan_group_size_238)
+    ({{0i32},
+      [],
+      fn {i32} (i32 x_207, i32 x_208) =>
+        let {i32 res_209} = add32(x_207, x_208)
+        in {res_209}})
+    (gtid_242 < 10i32) (~phys_tid_243) : {i32} {
+      let {i32 x_210} = ys_190[gtid_242]
+      return {returns x_210}
+    }
+  let {i32 segred_group_size_247} =
+    get_size(segred_group_size_246, group_size)
+  let {i32 num_groups_249} =
+    calc_num_groups(10i64, segred_num_groups_248, segred_group_size_247)
+  -- mem_275 aliases mem_267
+  let {mem mem_275} = mem_267
+  -- acc0_251 : [1i32]i32@@mem_275->
+  -- {base: [1i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+  --                                           rotates: [0i32]; shape: [1i32];
+  --                                           permutation: [0];
+  --                                           monotonicity: [Inc]}]}
+  let {[1i32]i32 acc0_251} =
+    segred_thread
+    (#groups=num_groups_249; groupsize=segred_group_size_247)
+    ({{0i32},
+      [],
+      commutative fn {i32} (i32 x_217, i32 x_218) =>
+        let {i32 res_219} = add32(x_217, x_218)
+        in {res_219}})
+    (dummy_252 < 1i32, gtid_253 < 10i32) (~phys_tid_254) : {i32} {
+      let {i32 x_220} = resarr0_206[gtid_253]
+      return {returns x_220}
+    }
+  let {i32 acc0_216} = acc0_251[0i32]
+  let {i32 res_223} = add32(acc0_200, acc0_216)
+  in {res_223}
+}
+
+#+end_src
+
+As you can see on line [[(ref:mem_263)]], it succesfully changes the allocation to
+reuse an existing allocation! Unfortunately, my last-use analysis is far too
+simple, even with aliasing. From the debugging output, we can see that ~mem_260~
+is reported as being last-used on line [[(ref:xs_187)]], when in reality it is used
+by all references to ~xs_187~. Furthermore, even if we fixed that so the
+last-use of ~mem_260~ was equal to the last-use of ~xs_187~, that happens
+immediately after, on line [[(ref:xs_188)]], but that's still not the actual
+last-use of ~mem_260~: ~res_187~  is consumed in the update which creates
+~res_188~, which still resides in ~mem_260~.
+
+I knew all of this would be problems with my last-use analysis, but it still
+feels nice to see that the pass works.
+
+There are many more issues with the pass: It needs to handle nested blocks, and
+in reality it probably should only concern itself with code inside kernels. But
+now that I have a working foundation, I feel like the time is right to go back
+and implement Cosmins more advanced last-use analysis. I clearly need it.
