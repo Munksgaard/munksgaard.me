@@ -1,0 +1,20 @@
+#+TITLE: 2020-07-13
+#+DATE: <2020-07-13 Mon>
+
+* Yesterday, and the plan for today
+
+On Friday, I managed to get my allocation optimizer pass working. However, there
+are a lot of shortcomings, and the last-use analysis is not up to scratch.
+
+Today, I'll give an honest attempt at trying to port Cosmins pass so I can use
+that instead of my own.
+
+* Last-use, again
+
+Lot's of work to be done.
+
+* Tomorrow
+
+It'd be nice to be able to present my current progress in a nice manner to
+Cosmin and the others. Can I write some pseudocode for the algorithm as it looks
+so far?
