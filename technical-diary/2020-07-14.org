@@ -1,0 +1,160 @@
+#+TITLE: 2020-07-14
+#+DATE: <2020-07-14 Tue>
+
+* Yesterday, and the plan for today
+
+I got a bunch of work done on the last-use analysis yesterday, but I didn't get
+around to documenting any of it. I'll try to be a little bit better at
+documenting my progress as I continue with the same task today.
+
+I also have the meeting with Cosmin and the others at 15, should I prepare
+something for them?
+
+* ~LastUse~
+
+Yesterday, I finished handling most of the AST constructs, including loops and
+ifs, and most memory/gpu operatings. The main thing that's left is the ~SegOp~
+constructs. Let's take a stab at ~SegMap~.
+
+I was working on porting Cosmins old LastUse analysis, but it turns out that the
+lore thing is way too cumbersome to work with. Troels suggests creating a table
+of some kind, and use the first element of the pattern to uniquely identify each
+statement, instead of using the statement counter I was using previously.
+
+After working on that for some time I now believe I have a functioning last-use
+analysis. Here's the output for ~psum.fut~:
+
+#+begin_src
+Analyzing Name "main"
+Params: [Param {paramName = VName (Name "xss_mem") 760, paramDec = MemMem DefaultSpace},Param {paramName = VName (Name "impl\8320") 245, paramDec = MemPrim (IntType Int32)},Param {paramName = VName (Name "impl\8321") 246, paramDec = MemPrim (IntType Int32)},Param {paramName = VName (Name "xss") 247, paramDec = MemArray (IntType Int32) (Shape {shapeDims = [Var (VName (Name "impl\8320") 245),Var (VName (Name "impl\8321") 246)]}) Nonunique (ArrayIn (VName (Name "xss_mem") 760) (IxFun {ixfunLMADs = LMAD {lmadOffset = ValueExp (IntValue (Int32Value 0)), lmadDims = [LMADDim {ldStride = LeafExp (VName (Name "impl\8321") 246) (IntType Int32), ldRotate = ValueExp (IntValue (Int32Value 0)), ldShape = LeafExp (VName (Name "impl\8320") 245) (IntType Int32), ldPerm = 0, ldMon = Inc},LMADDim {ldStride = ValueExp (IntValue (Int32Value 1)), ldRotate = ValueExp (IntValue (Int32Value 0)), ldShape = LeafExp (VName (Name "impl\8321") 246) (IntType Int32), ldPerm = 1, ldMon = Inc}]} :| [], base = [LeafExp (VName (Name "impl\8320") 245) (IntType Int32),LeafExp (VName (Name "impl\8321") 246) (IntType Int32)], ixfunContig = True}))}]
+
+(res_409, [])
+(resarr0_416, [])
+(res_419, [x_417, x_418])
+(x_420, [xss_247, gtid_292, gtid_295])
+(resarr0_426, [])
+(res_429, [x_427, x_428])
+(x_430, [gtid_297, resarr0_416])
+(resarr0_435, [impl₀_245, impl₁_246])
+(res_438, [x_436, x_437])
+(x_439, [gtid_299, resarr0_426])
+(bytes_763, [binop_x_764])
+(binop_x_764, [])
+(mem_765, [bytes_763])
+(bytes_767, [binop_x_768])
+(binop_x_768, [])
+(mem_769, [bytes_767])
+(bytes_771, [binop_x_772])
+(binop_x_772, [])
+(mem_773, [bytes_771])
+(bytes_774, [binop_x_777])
+(binop_x_775, [])
+(binop_y_776, [])
+(binop_x_777, [binop_x_775, binop_y_776])
+(mem_778, [bytes_774])
+
+#[incremental_flattening(only_intra)]
+let {i64 binop_x_775} = sext i32 impl₀_245 to i64
+#[incremental_flattening(only_intra)]
+let {i64 binop_y_776} = sext i32 impl₁_246 to i64
+#[incremental_flattening(only_intra)]
+let {i64 binop_x_777} = mul_nw64(binop_x_775, binop_y_776)
+#[incremental_flattening(only_intra)]
+let {i64 bytes_774} = mul_nw64(4i64, binop_x_777)
+#[incremental_flattening(only_intra)]
+let {mem mem_778} =
+  alloc(bytes_774)
+let {i64 binop_x_764} = sext i32 impl₁_246 to i64
+let {i64 bytes_763} = mul_nw64(4i64, binop_x_764)
+let {i64 binop_x_768} = sext i32 impl₁_246 to i64
+let {i64 bytes_767} = mul_nw64(4i64, binop_x_768)
+let {i64 binop_x_772} = sext i32 impl₁_246 to i64
+let {i64 bytes_771} = mul_nw64(4i64, binop_x_772)
+#[incremental_flattening(only_intra)]
+-- res_409 : [impl₀_245][impl₁_246]i32@@mem_778->
+-- {base: [impl₀_245, impl₁_246]; contiguous: True; LMADs: [{offset: 0i32;
+--                                                           strides: [impl₁_246, 1i32];
+--                                                           rotates: [0i32, 0i32];
+--                                                           shape: [impl₀_245, impl₁_246];
+--                                                           permutation: [0, 1];
+--                                                           monotonicity: [Inc, Inc]}]}
+let {[impl₀_245][impl₁_246]i32 res_409} =
+  segmap_group
+  (#groups=impl₀_245; groupsize=impl₁_246)
+  (gtid_292 < impl₀_245) (~phys_tid_305) : {[impl₁_246]i32} {
+    let {mem@local mem_765} =
+      alloc(bytes_763, @local)
+    -- resarr0_416 : [impl₁_246]i32@@mem_765->
+    -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                                rotates: [0i32];
+    --                                                shape: [impl₁_246];
+    --                                                permutation: [0];
+    --                                                monotonicity: [Inc]}]}
+    let {[impl₁_246]i32 resarr0_416} =
+      segscan_thread
+      (#groups=impl₀_245; groupsize=impl₁_246)
+      ({{0i32},
+        [],
+        fn {i32} (i32 x_417, i32 x_418) =>
+          let {i32 res_419} = add32(x_417, x_418)
+          in {res_419}})
+      (gtid_295 < impl₁_246) (~phys_tid_296) : {i32} {
+        let {i32 x_420} = xss_247[gtid_292, gtid_295]
+        return {returns x_420}
+      }
+    let {mem@local mem_769} =
+      alloc(bytes_767, @local)
+    -- resarr0_426 : [impl₁_246]i32@@mem_769->
+    -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                                rotates: [0i32];
+    --                                                shape: [impl₁_246];
+    --                                                permutation: [0];
+    --                                                monotonicity: [Inc]}]}
+    let {[impl₁_246]i32 resarr0_426} =
+      segscan_thread
+      (#groups=impl₀_245; groupsize=impl₁_246)
+      ({{0i32},
+        [],
+        fn {i32} (i32 x_427, i32 x_428) =>
+          let {i32 res_429} = add32(x_427, x_428)
+          in {res_429}})
+      (gtid_297 < impl₁_246) (~phys_tid_298) : {i32} {
+        let {i32 x_430} = resarr0_416[gtid_297]
+        return {returns x_430}
+      }
+    let {mem@local mem_773} =
+      alloc(bytes_771, @local)
+    -- resarr0_435 : [impl₁_246]i32@@mem_773->
+    -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                                rotates: [0i32];
+    --                                                shape: [impl₁_246];
+    --                                                permutation: [0];
+    --                                                monotonicity: [Inc]}]}
+    let {[impl₁_246]i32 resarr0_435} =
+      segscan_thread
+      (#groups=impl₀_245; groupsize=impl₁_246)
+      ({{0i32},
+        [],
+        fn {i32} (i32 x_436, i32 x_437) =>
+          let {i32 res_438} = add32(x_436, x_437)
+          in {res_438}})
+      (gtid_299 < impl₁_246) (~phys_tid_300) : {i32} {
+        let {i32 x_439} = resarr0_426[gtid_299]
+        return {returns x_439}
+      }
+    return {returns resarr0_435}
+  }
+in {impl₀_245, impl₁_246, mem_778, res_409}
+#+end_src
+
+In particular, it correctly computes that ~resarr0_416~ is last used on the line
+that creates ~x_430~, meaning that the allocation for ~resarr0_416~ is ready to
+be used when allocating ~mem_773~. It doesn't really handle aliasing though, as
+apparent when I try to run it on my ~array_indexing.fut~ program.
+
+It only works for ~KernelsMem~, but it should be possible to extend it to more
+general lores, probably by using some custom type class.
+
+* Pseudo-code for the linear scan
+
+I'll do this tomorrow.
