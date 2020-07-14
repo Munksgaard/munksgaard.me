@@ -158,3 +158,40 @@ general lores, probably by using some custom type class.
 * Pseudo-code for the linear scan
 
 I'll do this tomorrow.
+
+* Aside: OBS and v4l2sink on NixOS
+
+I have problems sharing my screen in Zoom and Skype, so I've played around with
+using [[https://obsproject.com/][OBS Studio]] and [[https://github.com/CatxFish/obs-v4l2sink][obs-v4l2sink]] to allow me to create virtual cameras that I
+can then share my screen on. It works, but I haven't actually used it much,
+because, when not actually presenting anything in a zoom or skype meeting, my
+window is still small... Anyway, here's what I did to make OBS and v4l2sink work
+on my NixOS setup:
+
+ - Add ~obs-studio~, ~obs-wlrobs~ and ~obs-v4l2sink~ to
+   ~environment.systemPackages~ in ~/etc/nixos/configuration.nix~.
+ - Add the following boot options in ~/etc/nixos/configuration.nix~:
+
+   #+begin_src
+  # Modules and kernel conf for obs
+  boot.extraModulePackages = with config.boot.kernelPackages; [ v4l2loopback ];
+  boot.kernelModules = [ "v4l2loopback" ];
+  boot.extraModprobeConfig = ''
+    options v4l2loopback exclusive_caps=1 video_nr=9 card_label="obs"
+  '';
+   #+end_src
+ - After rebuilding with `sudo nixos-rebuild switch`, I need to manually link
+   wlrobs and v4l2sink into OBS' plugin directory:
+
+
+   #+begin_src bash
+   ln -s `nix-build '<nixpkgs>' -A obs-wlrobs --no-out-link`/share/obs/obs-plugins/wlrobs ~/.config/obs-studio/plugins/wlrobs
+   ln -s `nix-build '<nixpkgs>' -A obs-v4l2sink --no-out-link`/share/obs/obs-plugins/v4l2sink ~/.config/obs-studio/plugins/v4l2sink
+   #+end_src
+
+I'm not quite sure why that last part isn't being done by nixpkgs automatically,
+hopefully it'll be unnecessary at some point.
+
+With that, you can start OBS studio, set up your scenes and set up v4l2sink in
+Tools -> V4l2sink (make sure it points to ~/dev/video9~). In zoom, you should
+now be able to select the new virtual camera.
