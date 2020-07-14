@@ -30,6 +30,7 @@ for us.
  - [[http://www.talkchess.com/forum3/viewtopic.php?f=7&t=47740][Discussion of how to compute ~perft(15)~]]
  - [[http://talkchess.com/forum3/viewtopic.php?f=7&t=63346][Generating moves on GPU in parallel]]
  - [[http://indriid.com/2019/2019-01-06-tinsmith.pdf][Using a GPU for a chess engine]]
+ - [[https://github.com/smatovic/Zeta/blob/master/src/zetaperft.cl][OpenCL implementation of perft]]
 
 * ReuseAllocs
 
