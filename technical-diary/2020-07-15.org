@@ -1,0 +1,15 @@
+#+TITLE: 2020-07-15
+#+DATE: <2020-07-15 Wed>
+
+* Yesterday, and the plan for today
+
+Yesterday, I got managed to get a better version of my last-use analysis to
+work. It still doesn't handle aliasing properly, but I think it's good enough
+that I can adapt my linear-scan to use it instead of the old last-use. I also
+really need to write the pseudo-code for my linear scan for Cosmin, today.
+
+* Linear-scan
+
+So, after figthting with scoping for a bit, I think linear scan works a lot
+better now. I'll write some more about the status tomorrow. And write the
+pseudo-code...
