@@ -1,0 +1,627 @@
+#+TITLE: 2020-07-16
+#+DATE: <2020-07-16 Thu>
+
+* Linear scan, continued
+
+** Yesterday, and today
+Yesterday, I spent most of the day implementing the linear scan algorithm and
+refining the last-use analysis. Except for aliases, at the end of the day, my
+~ReuseAllocations~ pass (the name I've chosen for the implementation of the
+linear scan algorithm) was able to keep track of allocations and frees
+throughout a program, including inside kernels and other blocks. However,
+because my pipeline didn't perform common subexpression elimintation, I ended up
+not actually reusing any memory, because each ~alloc~ would use a distinct
+subexpression. Thankfully, today, Troels pointed out that in order to get common
+subexpression elimination, I just need to insert the
+`Futhark.Optimise.CSE.performCSE` pass in my pipeline.
+
+Consider the following program, which I've called ~psum~:
+
+#+begin_src futhark -n -r
+let psum = scan (+) 0
+
+let main (xss: [][]i32) =
+  #[incremental_flattening(only_intra)]
+  map (psum >-> psum >-> psum)
+      xss
+#+end_src
+
+Using my ~ReuseAllocations~ pass, I can generate the following code:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  -- xss_247 : [impl₀_245][impl₁_246]i32@@xss_mem_760->
+  -- {base: [impl₀_245, impl₁_246]; contiguous: True; LMADs: [{offset: 0i32;
+  --                                                           strides: [impl₁_246, 1i32];
+  --                                                           rotates: [0i32, 0i32];
+  --                                                           shape: [impl₀_245, impl₁_246];
+  --                                                           permutation: [0, 1];
+  --                                                           monotonicity: [Inc, Inc]}]}
+  entry {*[?0][?1]i32@?2->
+         {base: [?0, ?1]; contiguous: True; LMADs: [{offset: 0i32;
+                                                     strides: [?1, 1i32];
+                                                     rotates: [0i32, 0i32];
+                                                     shape: [?0, ?1];
+                                                     permutation: [0, 1];
+                                                     monotonicity: [Inc, Inc]}]}}
+  main (mem xss_mem_760, i32 impl₀_245, i32 impl₁_246,
+        [impl₀_245][impl₁_246]i32 xss_247) = {
+    #[incremental_flattening(only_intra)]
+    let {i64 binop_x_775} = sext i32 impl₀_245 to i64
+    #[incremental_flattening(only_intra)]
+    let {i64 binop_y_776} = sext i32 impl₁_246 to i64
+    #[incremental_flattening(only_intra)]
+    let {i64 binop_x_777} = mul_nw64(binop_x_775, binop_y_776)
+    #[incremental_flattening(only_intra)]
+    let {i64 bytes_774} = mul_nw64(4i64, binop_x_777)
+    #[incremental_flattening(only_intra)]
+    let {mem mem_778} =
+      alloc(bytes_774)
+    let {i64 binop_x_764} = binop_y_776
+    let {i64 bytes_763} = mul_nw64(4i64, binop_y_776)
+    let {i64 binop_x_768} = binop_y_776
+    let {i64 bytes_767} = bytes_763
+    let {i64 binop_x_772} = binop_y_776
+    let {i64 bytes_771} = bytes_763
+    #[incremental_flattening(only_intra)]
+    -- res_409 : [impl₀_245][impl₁_246]i32@@mem_778->
+    -- {base: [impl₀_245, impl₁_246]; contiguous: True; LMADs: [{offset: 0i32;
+    --                                                           strides: [impl₁_246, 1i32];
+    --                                                           rotates: [0i32, 0i32];
+    --                                                           shape: [impl₀_245, impl₁_246];
+    --                                                           permutation: [0, 1];
+    --                                                           monotonicity: [Inc, Inc]}]}
+    let {[impl₀_245][impl₁_246]i32 res_409} =
+      segmap_group
+      (#groups=impl₀_245; groupsize=impl₁_246)
+      (gtid_292 < impl₀_245) (~phys_tid_305) : {[impl₁_246]i32} {
+        let {mem@local mem_765} =
+          alloc(bytes_763, @local)
+        -- resarr0_416 : [impl₁_246]i32@@mem_765->
+        -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+        --                                                rotates: [0i32];
+        --                                                shape: [impl₁_246];
+        --                                                permutation: [0];
+        --                                                monotonicity: [Inc]}]}
+        let {[impl₁_246]i32 resarr0_416} =
+          segscan_thread
+          (#groups=impl₀_245; groupsize=impl₁_246)
+          ({{0i32},
+            [],
+            fn {i32} (i32 x_417, i32 x_418) =>
+              let {i32 res_419} = add32(x_417, x_418)
+              in {res_419}})
+          (gtid_295 < impl₁_246) (~phys_tid_296) : {i32} {
+            let {i32 x_420} = xss_247[gtid_292, gtid_295]
+            return {returns x_420}
+          }
+        let {mem@local mem_769} =                                      -- ref:769
+          alloc(bytes_763, @local)
+        -- resarr0_426 : [impl₁_246]i32@@mem_769->
+        -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+        --                                                rotates: [0i32];
+        --                                                shape: [impl₁_246];
+        --                                                permutation: [0];
+        --                                                monotonicity: [Inc]}]}
+        let {[impl₁_246]i32 resarr0_426} =
+          segscan_thread
+          (#groups=impl₀_245; groupsize=impl₁_246)
+          ({{0i32},
+            [],
+            fn {i32} (i32 x_427, i32 x_428) =>
+              let {i32 res_429} = add32(x_427, x_428)
+              in {res_429}})
+          (gtid_297 < impl₁_246) (~phys_tid_298) : {i32} {
+            let {i32 x_430} = resarr0_416[gtid_297]                    -- ref:430
+            return {returns x_430}
+          }
+        -- mem_773 aliases mem_765
+        let {mem@local mem_773} = mem_765                              -- ref:773
+        -- resarr0_435 : [impl₁_246]i32@@mem_773->
+        -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+        --                                                rotates: [0i32];
+        --                                                shape: [impl₁_246];
+        --                                                permutation: [0];
+        --                                                monotonicity: [Inc]}]}
+        let {[impl₁_246]i32 resarr0_435} =
+          segscan_thread
+          (#groups=impl₀_245; groupsize=impl₁_246)
+          ({{0i32},
+            [],
+            fn {i32} (i32 x_436, i32 x_437) =>
+              let {i32 res_438} = add32(x_436, x_437)
+              in {res_438}})
+          (gtid_299 < impl₁_246) (~phys_tid_300) : {i32} {
+            let {i32 x_439} = resarr0_426[gtid_299]
+            return {returns x_439}
+          }
+        return {returns resarr0_435}
+      }
+    in {impl₀_245, impl₁_246, mem_778, res_409}
+  }
+#+end_src
+
+Notice that ~mem_765~ is not being reused on line [[(769)]], because it's not free
+until after line [[(430)]]. However, on line [[(773)]], ~resarr0_416~ and it's
+associated memory block ~mem_765~ is free, and we can therefore assign ~mem_773~
+to ~mem_765~.
+
+It also works on a program which consumes an array by doing in-place updates:
+
+#+begin_src futhark -n -r
+let main (n: i32): i32=
+  let xs = iota(10)
+  let xs[1] = xs[0]
+
+  let x = reduce (+) 0 xs
+
+  let ys = iota(10)
+  let ys[1] = ys[0]
+
+  let y = reduce (+) 0 (scan (+) 0 ys)
+
+  in x + y
+#+end_src
+
+The program above becomes
+
+#+begin_src futhark -n -r
+  entry {i32} main (i32 n_186) = {
+    let {mem mem_260} =
+      alloc(40i64)
+    -- res_187 : [10i32]i32@@mem_260->
+    -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                            rotates: [0i32]; shape: [10i32];
+    --                                            permutation: [0];
+    --                                            monotonicity: [Inc]}]}
+    let {[10i32]i32 res_187} = iota32(10i32, 0i32, 1i32)
+    -- xs_188 : [10i32]i32@@mem_260->
+    -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                            rotates: [0i32]; shape: [10i32];
+    --                                            permutation: [0];
+    --                                            monotonicity: [Inc]}]}
+    let {[10i32]i32 xs_188} =
+      -- Consumes res_187
+      res_187 with [1i32] <- 0i32                                       (ref:188)
+    let {mem mem_263} =
+      alloc(40i64)
+    -- res_189 : [10i32]i32@@mem_263->
+    -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                            rotates: [0i32]; shape: [10i32];
+    --                                            permutation: [0];
+    --                                            monotonicity: [Inc]}]}
+    let {[10i32]i32 res_189} = iota32(10i32, 0i32, 1i32)
+    -- ys_190 : [10i32]i32@@mem_263->
+    -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                            rotates: [0i32]; shape: [10i32];
+    --                                            permutation: [0];
+    --                                            monotonicity: [Inc]}]}
+    let {[10i32]i32 ys_190} =
+      -- Consumes res_189
+      res_189 with [1i32] <- 0i32
+    let {i32 segred_group_size_227} =
+      get_size(segred_group_size_226, group_size)
+    let {i32 num_groups_229} =
+      calc_num_groups(10i64, segred_num_groups_228, segred_group_size_227)
+    let {mem mem_267} =
+      alloc(4i64)
+    -- acc0_231 : [1i32]i32@@mem_267->
+    -- {base: [1i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                           rotates: [0i32]; shape: [1i32];
+    --                                           permutation: [0];
+    --                                           monotonicity: [Inc]}]}
+    let {[1i32]i32 acc0_231} =
+      segred_thread
+      (#groups=num_groups_229; groupsize=segred_group_size_227)
+      ({{0i32},
+        [],
+        commutative fn {i32} (i32 x_201, i32 x_202) =>
+          let {i32 res_203} = add32(x_201, x_202)
+          in {res_203}})
+      (dummy_232 < 1i32, gtid_233 < 10i32) (~phys_tid_234) : {i32} {
+        let {i32 x_204} = xs_188[gtid_233]                              (ref:204)
+        return {returns x_204}
+      }
+    let {i32 acc0_200} = acc0_231[0i32]
+    let {i32 segscan_group_size_238} =
+      get_size(segscan_group_size_237, group_size)
+    let {i32 num_groups_240} =
+      calc_num_groups(10i64, segscan_num_groups_239, segscan_group_size_238)
+    -- mem_271 aliases mem_260
+    let {mem mem_271} = mem_260                                         (ref:271)
+    -- resarr0_206 : [10i32]i32@@mem_271->
+    -- {base: [10i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                            rotates: [0i32]; shape: [10i32];
+    --                                            permutation: [0];
+    --                                            monotonicity: [Inc]}]}
+    let {[10i32]i32 resarr0_206} =
+      segscan_thread
+      (#groups=num_groups_240; groupsize=segscan_group_size_238)
+      ({{0i32},
+        [],
+        fn {i32} (i32 x_207, i32 x_208) =>
+          let {i32 res_209} = add32(x_207, x_208)
+          in {res_209}})
+      (gtid_242 < 10i32) (~phys_tid_243) : {i32} {
+        let {i32 x_210} = ys_190[gtid_242]
+        return {returns x_210}
+      }
+    let {i32 segred_group_size_247} =
+      get_size(segred_group_size_246, group_size)
+    let {i32 num_groups_249} =
+      calc_num_groups(10i64, segred_num_groups_248, segred_group_size_247)
+    -- mem_275 aliases mem_267
+    let {mem mem_275} = mem_267
+    -- acc0_251 : [1i32]i32@@mem_275->
+    -- {base: [1i32]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                           rotates: [0i32]; shape: [1i32];
+    --                                           permutation: [0];
+    --                                           monotonicity: [Inc]}]}
+    let {[1i32]i32 acc0_251} =
+      segred_thread
+      (#groups=num_groups_249; groupsize=segred_group_size_247)
+      ({{0i32},
+        [],
+        commutative fn {i32} (i32 x_217, i32 x_218) =>
+          let {i32 res_219} = add32(x_217, x_218)
+          in {res_219}})
+      (dummy_252 < 1i32, gtid_253 < 10i32) (~phys_tid_254) : {i32} {
+        let {i32 x_220} = resarr0_206[gtid_253]
+        return {returns x_220}
+      }
+    let {i32 acc0_216} = acc0_251[0i32]
+    let {i32 res_223} = add32(acc0_200, acc0_216)
+    in {res_223}
+  }
+#+end_src
+
+Again, we can see on line [[(271)]] that ~mem_260~ is being reused, but not until
+after it's associated array ~res_187~ and ~xs_188~ go out of scope on lines
+[[(188)]] and [[(204)]], respectively.
+
+There are still some test programs that don't work. The one below is called
+~if.fut~, and in the ideal case, our pass should be able to spot that inside the
+else branch, ~xs~ is able to be freely used. In other words, the ~indices xs~
+call on line [[(indices)]] should be able to reuse the allocation for ~xs~.
+
+#+begin_src futhark -n -r
+  let main (n: i32): *[]i32 =
+    let xs = iota(n)
+    let xs[1] = xs[0]
+    let ys =
+      if xs[0] > 0 then
+        xs
+      else
+        indices xs                                                  (ref:indices)
+
+    let ys[2] = 4
+    in ys
+#+end_src
+
+I'm also concerned that actual aliasing isn't handled nicely by my last-use
+analysis, but I don't yet have any programs that demonstrate the problem. I'll
+have to get back to that at some point.
+
+** Psedo-code
+
+Let's finally try to write down some pseudo-code for the linear-scan.
+
+First, we need to define what data structures we'll be working with. In the
+following, ~VName~ is a unique name for a variable in the futhark IR, while
+~SubExp~ can be either a ~VName~ or some constant.
+
+#+begin_src haskell
+type Frees = [(VName, SubExp)]
+type Allocs = [(VName, SubExp)]
+
+type LastUseMap = Map VName [VName]
+#+end_src
+
+The ~Frees~ and ~Allocs~ lists consist of pairs of ~VName~ and ~SubExp~. A given
+~(vname, sexp)~ pair in an ~Allocs~ list means that a memory block with name
+~vname~ and size ~sexp~ has been allocated. Once the array using that memory
+block are beyond their last-use, the pair is instead added to a ~Frees~ list, to
+indicate that the particular memory block is free.
+
+~LastUseMap~ is a map from ~VName~ to a list of ~VName~. Because each statement
+in the Futhark IR is uniquely determined by the name of the first element in the
+~let~ pattern, the ~LastUseMap~ allows us to map statements to a list of ~VName~
+that are last-used in the expression within the statement. Hence, in any given
+statement in the Futhark IR, we can use the ~LastUseMap~ to find out which
+variables are free after that statement.
+
+The basic algorithm then consists of the following
+
+#+begin_verse
+~optimiseStm :: LastUseMap -> Alllocs -> Frees -> Stm -> (Allocs, Frees, Stm)~
+~optimiseStm~ ~lu_map~ ~allocs~ ~frees~ (let ~p~ = ~exp~) =
+  if ~exp~ is an allocation then
+    if there is a memory block ~x~ of appropriate size in ~frees~ then
+      return (~allocs~ with (~p~, size of allocation), ~frees~ without ~x~, let ~p~ = ~x~)
+    else
+      return (~allocs~ with (~p~, size of allocation), ~frees~, let ~p~ = ~exp~)
+  else if ~exp~ contains a body of stms (scope) ~b~ then
+    let (~allocs'~, ~frees'~, ~b'~) = ~optimiseBody~ ~lu_map~ ~allocs~ ~frees~ ~b~
+    return (~allocs'~, ~frees'~, let ~p~ = ~exp~ with ~b'~)
+  else
+    let ~lus~ = lookup ~p~ in ~lu_map~
+    let ~new_frees~ = map (~memAndSize~ ~allocs~) on ~lus~
+    return (~allocs~, ~frees~ and ~new_frees~, let ~p~ = ~exp~)
+#+end_verse
+
+Here, ~optimiseBody~ is just a function which calls ~optimiseStm~ on the
+statements in a block, while ~memAndSize~ looks up the memory block (if any) of
+a given ~VName~, and returns the size of that memory block using the ~allocs~
+list.
+
+** Note about boolean in ~performCSE~
+
+While adding the CSE pass to my tests, which got ~ReuseAllocations~ to actually
+do something useful on ~psum.fut~, I noticed that it has a boolean argument
+that's not very well documented.
+
+Here's what Troels had to say:
+
+#+begin_src
+07:01:35   munksgaard | Athas: Perfect! What does the boolean argument to performCSE do?
+07:21:19        Athas | munksgaard: whether or not to perform CSE on expressions producing arrays.
+07:27:14   munksgaard | And why would you not want that?
+07:27:29   munksgaard | I see it's disabled in the GPU pipeline, for instance
+07:58:37        Athas | It's disabled after we add memory information, because at that point arrays have identity beyond their value, and doing CSE on them may
+                      | not be safe.
+07:59:13        Athas | Although this is an old design, and maybe our representation of memory has improved since then.  You can always try setting it to True
+                      | and see if anything breaks.
+#+end_src
+
+I'm going to try to compile a version of Futhark that always performs CSE (by
+setting that parameter to ~True~) and see if it passes our tests and
+benchmarks. If it turns out that we don't need it any more, I'll remove it from
+the code. Otherwise, I'll add some notes in the documentation about what it
+does.
+
+Here are the results with my modified version of Futhark which always performs
+CSE on expressions producing arrays:
+
+#+begin_src
+$ futhark test --backend=opencl --exclude=no_opencl tests/
+tests/issue715.fut:
+Compiling with --backend=opencl:
+Running compiled program:
+Running ./tests/issue715 -e main:
+Entry point: main; dataset: #0 ("true"):
+tests/issue715.fut.main.0.actual and tests/issue715.fut.main.0.expected do not match:
+Value (1,0) expected 0i32, got 2i32
+
+Entry point: main; dataset: #1 ("false"):
+tests/issue715.fut.main.1.actual and tests/issue715.fut.main.1.expected do not match:
+Value (1,0) expected 1i32, got 2i32
+
+┌──────────┬────────┬────────┬───────────┐
+│          │ passed │ failed │ remaining │
+├──────────┼────────┼────────┼───────────┤
+│ programs │ 1432   │ 1      │ 0/1433    │
+├──────────┼────────┼────────┼───────────┤
+│ runs     │ 2532   │ 2      │ 0/2534    │
+└──────────┴────────┴────────┴───────────┘
+ (3 program(s) excluded).
+#+end_src
+
+I'll add some documentation instead.
+
+[[https://github.com/diku-dk/futhark/pull/1057][Here]] is the pull request.
+
+** Add ReuseAllocations as a real Pass in Futhark
+
+It is done: https://github.com/diku-dk/futhark/tree/reuse-allocations
+
+I think this will be an easier way to test things, going forward. To begin with,
+I might just use it to run all the existing tests to see how many of them fail
+with my changes.
+
+** Running the tests
+
+Well, first of all, here are the errors I got when trying to run the futhark
+tests using my new pass:
+
+#+begin_src
+$ futhark test --backend=opencl --exclude=no_opencl tests/
+tests/fusion/Vers2.0/redomap0.fut:
+Compiling with --backend=opencl:
+Running compiled program:
+Running ./tests/fusion/Vers2.0/redomap0 -e main:
+Entry point: main; dataset: #0 ("[1.0f32, -4.0f32, -2.4f32]"):
+tests/fusion/Vers2.0/redomap0.fut.main.0.actual and tests/fusion/Vers2.0/redomap0.fut.main.0.expected do not match:
+Value (1,0) expected 2.0f32, got 3.0f32
+
+tests/fusion/Vers2.0/mapored1.fut:
+Compiling with --backend=opencl:
+Running compiled program:
+Running ./tests/fusion/Vers2.0/mapored1 -e main:
+Entry point: main; dataset: #0 ("[1.0f64, -4.0f64, -2.4f64]"):
+tests/fusion/Vers2.0/mapored1.fut.main.0.actual and tests/fusion/Vers2.0/mapored1.fut.main.0.expected do not match:
+Value (1,0) expected 12.0f64, got 40.0f64
+
+tests/fusion/Vers2.0/redomap1.fut:
+Compiling with --backend=opencl:
+Running compiled program:
+Running ./tests/fusion/Vers2.0/redomap1 -e main:
+Entry point: main; dataset: #0 ("[1.0f32, -4.0f32, -2.4f32]"):
+tests/fusion/Vers2.0/redomap1.fut.main.0.actual and tests/fusion/Vers2.0/redomap1.fut.main.0.expected do not match:
+Value (1,0) expected 2.0f32, got 4.0f32
+
+tests/fusion/Vers2.0/redoredomapomap0.fut:
+Compiling with --backend=opencl:
+Running compiled program:
+Running ./tests/fusion/Vers2.0/redoredomapomap0 -e main:
+Entry point: main; dataset: #0 ("[1.0f64, -4.0f64, -2.4f64]"):
+tests/fusion/Vers2.0/redoredomapomap0.fut.main.0.actual and tests/fusion/Vers2.0/redoredomapomap0.fut.main.0.expected do not match:
+Value (1,0) expected 2.0f64, got 0.0f64
+
+tests/badentry2.fut:
+Compiling with --backend=opencl:
+Expected warning:
+  ^$
+Got warnings:
+  allocs: []
+frees: []
+
+analyseStm res_11 aliases [] lus' [res_23]
+analyseStm res_14 aliases [] lus' [x_12, x_13]
+analyseStm x_15 aliases [] lus' [as_10, gtid_25]
+analyseStm res_23 aliases [] lus' [segred_group_size_19, num_groups_21]
+analyseStm mem_32 aliases [] lus' []
+analyseStm num_groups_21 aliases [] lus' [n₀_16]
+analyseStm segred_group_size_19 aliases [] lus' []
+analyseStm n₀_16 aliases [] lus' [n₀_9]
+n₀_16  adding new frees:  []  to already  []  from lus: [n₀_9]  and allocs:  []
+segred_group_size_19  adding new frees:  []  to already  []  from lus: []  and allocs:  []
+num_groups_21  adding new frees:  []  to already  []  from lus: [n₀_16]  and allocs:  []
+mem_32 frees []
+x_15  adding new frees:  []  to already  []  from lus: [as_10, gtid_25]  and allocs:  [(mem_32, 4i64)]
+res_14  adding new frees:  []  to already  []  from lus: [x_12, x_13]  and allocs:  [(mem_32, 4i64)]
+res_11  adding new frees:  [(mem_32, 4i64)]  to already  []  from lus: [res_23]  and allocs:  [(mem_32, 4i64)]
+res_14  adding new frees:  []  to already  []  from lus: [x_12, x_13]  and allocs:  [(mem_32, 4i64)]
+res_11  adding new frees:  [(mem_32, 4i64)]  to already  []  from lus: [res_23]  and allocs:  [(mem_32, 4i64)]
+allocs: [(mem_32, 4i64)]
+frees: [(mem_32, 4i64)]
+
+
+tests/badentry4.fut:
+Compiling with --backend=opencl:
+Expected warning:
+  ^$
+Got warnings:
+  allocs: []
+frees: []
+
+mem_6 frees []
+analyseStm res_3 aliases [] lus' [x_2]
+analyseStm mem_6 aliases [] lus' []
+res_3  adding new frees:  []  to already  []  from lus: [x_2]  and allocs:  [(mem_6, 4i64)]
+allocs: [(mem_6, 4i64)]
+frees: []
+
+
+tests/badentry3.fut:
+Compiling with --backend=opencl:
+Expected warning:
+  ^$
+Got warnings:
+  allocs: []
+frees: []
+
+mem_6 frees []
+analyseStm res_3 aliases [] lus' [x_2]
+analyseStm mem_6 aliases [] lus' []
+res_3  adding new frees:  []  to already  []  from lus: [x_2]  and allocs:  [(mem_6, 4i64)]
+allocs: [(mem_6, 4i64)]
+frees: []
+
+
+tests/badentry8.fut:
+Compiling with --backend=opencl:
+Expected warning:
+  ^$
+Got warnings:
+  allocs: []
+frees: []
+
+allocs: []
+frees: []
+
+
+┌──────────┬────────┬────────┬───────────┐
+│          │ passed │ failed │ remaining │
+├──────────┼────────┼────────┼───────────┤
+│ programs │ 1426   │ 8      │ 0/1434    │
+├──────────┼────────┼────────┼───────────┤
+│ runs     │ 2528   │ 8      │ 0/2536    │
+└──────────┴────────┴────────┴───────────┘
+ (3 program(s) excluded).
+#+end_src
+
+Most of those are just caused by the debugging messages I'm outputting, but the
+fusion failures are probably right. I'll have to look into what exactly is going
+wrong in each case.
+
+** Futhark meeting
+
+At the meeting today, I presented the algorithm above, and we had a nice
+discussion about it. Cosmin correctly pointed out that it assumes that
+allocations are quickly followed by their first-uses, in which an array is
+created in the allocated memory block. However, we cannot assume that that is
+always the case. In some cases, allocations are hoisted, so a program looks like
+the following example written by Troels:
+
+#+begin_src futhark
+let xs_mem = alloc ...
+let ys_mem = alloc ...
+...
+let xs@xs_mem = ...
+...
+... last use of xs ...
+...
+let ys@ys_mem = ...
+...
+in ys -- or whatever
+#+end_src
+
+In order to handle that, we'll need to keep track of /initial uses/ of memory
+blocks, in addition to their allocations.
+
+There's also the additional complication that we want the pass to be able to run
+multiple times. Imagine that we've optimised the program above so that it looks like
+this:
+
+#+begin_src futhark
+let xs_mem = alloc ...
+let ys_mem = alloc ...
+...
+let xs@xs_mem = ...
+...
+... last use of xs ...
+...
+let ys@xs_mem = ...
+...
+in ys -- or whatever
+#+end_src
+
+Now, our naive approach might find that ~xs_mem~ is last-used at the same time
+as ~xs~, but that's no longer the case.
+
+* Futhark highlighting in [[https://github.com/sharkdp/bat][bat]]
+
+I've been wanting this for a while, but I didn't want to have to write yet
+another syntax definition for Futhark. Thankfully, I realized that [[https://github.com/titouanc][titouanc]] has
+already done the hard work and created a [[https://github.com/titouanc/sublime-futhark][Futhark syntax highlighter for Sublime
+Text 3]]. Here are the commands I ran to get highlighting to work (adapted from
+[[https://github.com/sharkdp/bat#adding-new-syntaxes--language-definitions][this guide]]):
+
+#+begin_src bash
+ mkdir -p "$(bat --config-dir)/syntaxes"
+
+ cd "$(bat --config-dir)/syntaxes"
+
+ git clone git@github.com:titouanc/sublime-futhark.git
+
+ bat cache --build
+#+end_src
+
+It would be nice to set that up automatically as part of my NixOS configuration,
+but I'm too lazy to figure out how to do that right now.
+
+* The Common Lisp Condition System
+
+[[https://www.apress.com/gp/book/9781484261330][This book]] looks great! I think I'll pick it up once it comes out. More
+discussion about it [[https://news.ycombinator.com/item?id=23843525][here]].
+
+* ICFP 2020 contest
+
+The [[https://icfpcontest2020.github.io/][ICFP 2020 contest]] is coming up, and it looks like [[https://message-from-space.readthedocs.io/en/latest/][a lot of fun]]! I actually
+have time to do this for once, so I might give it a try over the
+weekend. Perhaps I'll post some technical diary entries for that.
+* Tomorrow
+
+Think about the problems discussed in [[*Futhark meeting][the section above]], and see if I can amend
+the pseudocode to alleviate those problems. We might need a two-pass approach:
+One to gather the arrays, memory blocks and their last uses, and one to merge
+memory blocks by assignment.
