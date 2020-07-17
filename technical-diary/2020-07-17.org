@@ -1,0 +1,229 @@
+#+TITLE: Reusing Allocations, redux
+#+DATE: <2020-07-17 Fri>
+
+* The problems with the current approach
+
+Yesterday, I [[file:2020-07-16.org::*Futhark meeting][presented my work]] on the linear scan algorithm to reuse memory
+allocations, and Troels and Cosmin rightly pointed out some shortcomings in my
+approach.
+
+The overall goal is to be able to reuse memory allocations. For that, we want a
+pass which can be inserted whenever we want to in the compiler pipeline (after
+kernels and memory has been introduced, of course), and we want to be able to
+run it multiple times. As such, the approach that I had was too brittle. It
+made (at least) two assumptions that are too broad:
+
+ 1. Memory allocations are always immediately succeeded[fn:1] by the first use of the
+    allocated memory block, as part of the instantiation of an array.
+ 2. Memory allocations are only used for the creation of one array.
+
+The first assumption is invalid in the face of hoisting. It turns out that some
+programs, [[https://github.com/diku-dk/futhark-benchmarks/blob/master/finpar/OptionPricing.fut][OptionPricing.fut]] in particular, hoists all allocations to outside the
+kernel in such a way that my algorithm didn't work. Consider the following
+example, written by Troels:
+
+#+begin_src futhark -n -r
+let xs_mem = alloc ...
+let ys_mem = alloc ...
+...
+let xs@xs_mem = ...
+...
+... last use of xs ...
+...
+let ys@ys_mem = ...
+...
+in ys -- or whatever
+#+end_src
+
+My algorithm would assume that the allocation point of a memory block is the
+same as the first use of said memory block, meaning that these allocations would
+never be reused. We need a more sophisticated algorithm, where the allocation
+points are distinct from the first-use points of a memory block.
+
+The other assumption fails whenever we've already performed our optimisation
+pass once, some code is moved around by the compiler (the Futhark compiler can
+do that a lot) and now we want to perform another optimisation pass. For
+instance, consider the following IR-like code representing what an optimised and
+transformed program could look like:
+
+#+begin_src futhark -n -r
+let xs_mem = alloc ...
+...
+let xs@xs_mem = ...
+...
+... last use of xs ...
+...
+let zs_mem = alloc ...
+let zs@zs_mem = ...
+...
+let ys@xs_mem = ...
+...
+... last use of zs
+...
+in ys -- or whatever
+#+end_src
+
+The algorithm as I'd written it, would readily put ~zs~ in ~xs_mem~, because
+after the last use of ~xs~, ~xs_mem~ would be put in the free list. In
+principle, we could probably fix our analysis to correctly state that the last
+use of ~xs_mem~ is actually much later (at the last use of ~ys~), but that
+introduces a new problem:
+
+#+begin_src futhark -n -r
+let xs_mem = alloc ...
+...
+let xs@xs_mem = ...
+...
+... last use of xs ...
+...
+let zs_mem = alloc ...
+let zs@zs_mem = ...
+...
+... last use of zs
+...
+let ys@xs_mem = ...
+...
+in ys -- or whatever
+#+end_src
+
+Here, ~zs~ can readily be put in ~xs_mem~, because there's no overlap of the two
+use-intervals of ~xs_mem~ and ~zs_mem~. But out hypothetical analysis would
+indicate that the first use of ~xs_mem~ is at the allocation point, or perhaps
+when ~xs~ is being instantiated, and the last use is whenever ~ys~ is last used,
+which means that ~zs~ will not be put in ~xs_mem~ even though we can clearly see
+that it could be.
+
+So, we end up with some new assumptions for the algorithm:
+
+ 1. Allocations of memory blocks are distinct from instantiation of arrays in
+    those memory blocks.
+ 2. A memory block can have multiple use-intervals.
+
+Which requires us to rethink our algorithm substantially.
+
+* What do we need?
+
+The first thing we need to do, is decouple allocations from first-uses. This
+isn't necessarily hard to do, but it does require us to carry some extra state
+around. The solution probably is to still keep track of allocations, but in
+addition, we need to check each statement to see if it introduces an array. If
+that's the case, we look up the memory allocation and add it to the in-use list.
+
+The next thing we need to do, is to decouple memory block merging from the
+analysis pass. In the first version of the algorithm, memory block merging was
+done in the same pass as the analysis. But when allocations can happen way in
+advance of their actual use, there's no way to go back and change the earlier
+memory blocks without a pass. Therefore, I think we need to do to passes: One to
+analyse memory block usage and find their use-intervals, and one to actually
+"merge memory blocks" (eg. inserting the statement ~let ys_mem = xs_mem~ instead
+of ~let ys_mem = alloc ...~).
+
+The final piece of the puzzle is, how do we represent the multiple use-intervals
+of memory blocks? I think line/statement number integer intervals are brittle
+and don't translate well to Futhark (how are the different branches of an if
+statement translated into line numbers?). When doing the initial algorithm, we
+instead used first variable name in the statement pattern as a unique identifier
+for each list. However, the variable names do not have an obvious ordering, so
+simply representing intervals as $(firstStm, lastStm)$ won't allow us to
+intersect intervals. If we're to use variable names as identifiers for
+statements, we have to think of some other way to represent intervals.
+
+Thankfully, it can be done! Because each statement has a unique identifier (the first
+variable name in the pattern), a statement interval can be represented as the
+set of statements in that interval, represented by their unique identifier. Two
+intervals are just represented as a bigger set.
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let xs_mem = alloc ...
+  let xs@xs_mem = ...
+  let xs_1 = ...
+  let xs_2 = ...
+  let xs_res = ... -- last use of xs
+  let zs_mem = alloc ...                                            -- ref:zs_mem
+  let zs@zs_mem = ...
+  let zs_1 = ...
+  let zs_2 = ...
+  let zs_res = ... -- last use of zs
+  let ys@xs_mem = ...
+  let ys_1 = ...
+  let ys_2 = ...
+  in ys -- or whatever
+#+end_src
+
+Here, the use-intervals of ~xs_mem~ would be represented as the set {~xs~,
+~xs_1~, ~xs_2~, ~xs_res~, ~ys~, ~ys_1~, ~ys_2~}, while the use-intervals of
+~zs_mem~ would be represented as the set {~zs~, ~zs_1~, ~zs_2~, ~zs_res~}. Since
+those two sets are disjoint, we can merge their allocations by replacing line
+[[(zs_mem)]] with the statement ~let zs_mem = xs_mem~.
+
+In fact, perhaps we don't even need to keep track of memory block sizes
+(~Allocs~) until the second pass, where we merge the memory blocks?
+
+* Psuedo-code, part deux
+
+Let's start with some types.
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+  type Allocs = Map VName SubExp                                    -- ref:allocs
+
+  type LastUseMap = Map VName (Set VName)                       -- ref:lastusemap
+
+  type InUse = Set VName                                             -- ref:inuse
+
+  type UseMap = Map VName (Set VName)                               -- ref:usemap
+#+end_src
+
+[[(allocs)][~Allocs~]] is still a map from a memory block to a size, while [[(lastusemap)][~LastUseMap~]] is a
+map from a statement to a set of variables that are no longer used after that
+statement. [[(inuse)][~InUse~]] is used while walking through the program collecting
+live-intervals, and while processing a given statement it is the set of memory
+blocks currently instantiated to an array that is still in use. Finally,
+[[(usemap)][~UseMap~]] is a map from a memory block name to the set of statements in which
+that memory block is in use. The first algorithm, ~analyseStms~, which has
+the purpose of populating the ~UseMap~ looks like this:
+
+#+begin_verse
+~analyseStm :: LastUseMap -> InUse -> UseMap -> Stm -> (InUse, UseMap, Stm)~
+~analyseStm~ ~lu_map~ ~inuse~ ~usemap~ (let ~p~ = ~exp~) =
+  if ~exp~ contains a body of stms (ie. introduces a scope) ~b~ then
+    let (~inuse'~, ~usemap'~, ~b'~) = ~analyseBody~ ~lu_map~ ~inuse~ ~usemap~ ~b~
+    return (~inuse'~, ~usemap'~, let ~p~ = ~exp~ with ~b'~)
+  else
+    let ~mems~ = memory blocks referenced in ~p~
+    let ~inuse'~ = ~inuse~ ∪ ~mems~
+    let ~lus~ = lookup ~p~ in ~lu_map~
+    let ~lus_mems~ = memory blocks referenced in ~lus~
+    let ~inuse''~ = ~inuse'~ ∖ ~lus_mems~
+    let ~usemap'~ = ~usemap~ where for every ~name~ in ~inuse''~, ~p~ is added to the set in the map identified by ~name~
+#+end_verse
+
+At the end, we'll have a map of memory blocks to the set statements in which
+they are in use. Now, to perform the optimisation, we call ~optimiseStm~:
+
+#+begin_verse
+~optimiseStm :: UseMap -> Allocs -> Stm -> (UseMap, Allocs, Stm)~
+~optimiseStm~ ~usemap~ ~allocs~ (let ~p~ = ~exp~) =
+  if ~exp~ is an allocation then
+    if there is a memory block ~x~ in ~allocs~ with the right size, and the use set for ~x~ in ~usemap~ does not overlap with the use set for ~p~ then
+      let ~usemap'~ = ~usemap~ with the use set for ~x~ and the use set for ~p~ merged under the name ~x~
+      return (~usemap'~ , ~allocs~, let ~p~ = ~x~)
+    else
+      return (~usemap~, ~allocs~ with (~p~, size of allocation), let ~p~ = ~exp~)
+  else if ~exp~ contains a body of stms (ie. introduces a scope) ~b~ then
+    let (~usemap'~, ~allocs'~, ~b'~) = ~optimiseBody~ ~usemap~ ~allocs~ ~b~
+    return (~usemap'~, ~allocs'~, let ~p~ = ~exp~ with ~b'~)
+  else
+    return (~usemap~, ~allocs~, let ~p~ = ~exp~)
+#+end_verse
+
+The important bit here is the check for size and use overlap, as well as the
+merge of use sets. I think it should work even for the programs and situations I
+described above. I'll have to think about it some more, and perhaps try my hand
+at implementing it, but now I think I'll stop for today, look at ICFP and enjoy
+my weekend.
+
+See you on Monday!
+
+* Footnotes
+
+[fn:1] At least in relation to other allocations and array instantiations.
