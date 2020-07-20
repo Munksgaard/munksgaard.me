@@ -1,0 +1,141 @@
+#+TITLE: Reuse Allocations: Return of the Pseudo-code
+#+DATE: <2020-07-20 Mon>
+
+* More problems
+
+On [[file:2020-07-17.org::*Psuedo-code, part deux][Friday]], I described some new algorithms for handling allocation reuse in
+Futhark that could handle memory block allocations split from the actual use of
+the memory block use as well as multiple uses of a single memory block. Over the
+weekend, I realized that the algorithm wouldn't handle loop expressions of if
+expressions correctly.
+
+For loop expressions the memory blocks that are live at the beginning of the
+loop body must not be reused during the execution of the loop body, since the
+loop body might be executed multiple times.
+
+For if expressions, we need a way to merge the uses in one branch with the uses
+in another branch.
+
+* Loops
+
+My first idea for solving the problem with loops was to include some extra
+information in the ~InUse~ list:
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+InUse: [{ vname: VName, protected: Bool, free: Bool }]
+#+end_src
+
+However, Troels pointed out that perhaps it would be easier to keep track of all
+the new blocks used within the body of the loop, and then insert an artificial
+statement associating those blocks with the blocks that were live at the
+beginning of the loop body. That lead me to consider whether we could simplify
+the ~UseMap~ considerably. In [[file:2020-07-17.org::(usemap)][the definition from Friday]], a ~UseMap~ maps memory
+blocks to statements in which they are in use. But really, what we're interested
+in, is whether the in-use scope of one memory block overlaps with the in-use
+scope of another memory block. Instead of having a map from memory blocks to all
+their in-use statements, we can instead use an undirected graph, where an edge
+between two memory blocks (vertices) means that their in-use scopes overlap. In
+order to handle loops, we collect a list of the memory blocks that were used
+throughout the loop body, and at the end we just insert edges between those
+memory blocks and the memory blocks that were in use before the loop.
+
+* Ifs
+
+To handle if-expressions using the new technique proposed [[*Loops][above]], we just need to
+merge the graphs from the two branches of the if. That is, the edges $E$ in the
+resulting graph $G$ will be $E = E_1 \cup E_2$, where $E_1$ are the edges in the
+then-branch and $E_2$ are the edges in the else-branch.
+
+However, we have an opportunity for some extra optimisations with ifs. Consider
+the following piece of code:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let xs_mem = alloc ...
+  let ys_mem = alloc ...
+
+  let xs@xs_mem = ...
+
+  let zs@zs_mem =
+    if ... then
+      xs                          -- last use of xs_mem
+    else
+      let ys@ys_mem = ...
+      in ys
+
+  in ...
+#+end_src
+
+Here, ~xs_mem~ is last used in the then-branch of the if-expression, and not
+used at all in the then-branch, which means that ~ys_mem~ and ~xs_mem~ could
+actually be merged. However, ~xs_mem~ is in use at the beginning of the loop
+body, so our algorithm will report that its in-use scope overlaps with ~ys_mem~,
+even if we can clearly see that it doesn't.
+
+I'm not quite sure how to fix this, because in the other branch we clearly need
+~xs_mem~ to be in use. I'll have to think some more about this.
+
+In the mean-time, here's some pseudocode for the updated algorithm.
+
+* Pseudo-code
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+  type Allocs = Map VName SubExp                                    -- ref:allocs
+
+  type LastUseMap = Map VName (Set VName)                       -- ref:lastusemap
+
+  type InUse = Set VName                                             -- ref:inuse
+
+  type MemGraph = Graph VName                                        -- ref:graph
+
+  type WasUsed = Set VName                                         -- ref:wasused
+#+end_src
+
+Here, [[(graph)][~MemGraph~]] is an undirected graph with unit edges. We're just
+interested in whether two memory blocks are connected or not. If two memory
+blocks are connected, their lifetimes overlap. [[(wasused)][~WasUsed~]] is a set of memory
+blocks that were used inside a body. Otherwise, everything is the same as in [[file:2020-07-17.org::*Psuedo-code, part deux][the
+last algorithm]].
+
+#+begin_verse
+~analyseStm :: LastUseMap -> InUse -> WasUsed -> MemGraph -> Stm -> (WasUsed, InUse, MemGraph, Stm)~
+~analyseStm~ ~lu_map~ ~inuse~ ~wasused~ ~graph~ (let ~p~ = ~exp~) =
+  if ~exp~ is a loop with body ~b~ then
+    let (~wasused'~, ~inuse'~, ~graph'~, ~b'~) = ~analyseBody~ ~lu_map~ ~inuse~ ~wasused~ ~graph~ ~b~
+    let ~graph''~ = ~graph'~ with edges between blocks in ~inuse~ and blocks in ~wasused'~
+    return (~wasused'~, ~inuse'~, ~graph'~, let ~p~ = ~exp~ with ~b'~)
+  else if ~exp~ is a if with bodies ~b1~, ~b2~ then
+    let (~wasused1~, ~inuse1~, ~graph1~, ~b1'~) = ~analyseBody~ ~lu_map~ ~inuse~ ~wasused~ ~graph~ ~b1~
+    let (~wasused2~, ~inuse2~, ~graph2~, ~b2'~) = ~analyseBody~ ~lu_map~ ~inuse~ ~wasused~ ~graph~ ~b1~
+    let ~inuse'~ = ~inuse1~ ∪ ~inuse2~
+    return (~wasused1~ ∪ ~wasused2~, ~inuse'~, ~graph1~ ∪ ~graph2~, let ~p~ = ~exp~ with ~b1'~ and ~b2'~)
+  else if ~exp~ contains a body of stms (ie. introduces a scope) ~b~ then
+    let (~wasused'~, ~inuse'~, ~graph'~, ~b'~) = ~analyseBody~ ~lu_map~ ~inuse~ ~wasused~ ~graph~ ~b~
+    return (~wasused'~, ~inuse'~, ~graph'~, let ~p~ = ~exp~ with ~b'~)
+  else
+    let ~mems~ = memory blocks referenced in ~p~
+    let ~inuse'~ = ~inuse~ ∪ ~mems~
+    let ~lus~ = lookup ~p~ in ~lu_map~
+    let ~lus_mems~ = memory blocks referenced in ~lus~
+    let ~graph'~ = ~graph~ with edges between all blocks in ~mems~ ∪ ~inuse~ ∪ ~lus_mems~
+    let ~inuse''~ = ~inuse'~ ∖ ~lus_mems~
+    let ~wasused'~ = ~wasused~ ∪ ~mems~ ∪ ~lus_mems~
+    return (~wasused~
+#+end_verse
+
+Hm, that looks alright, but the if-handling is not correct. If a block was last
+used in one of the two branches, it means that it is also out of scope after the
+if-expression. We need to do some set-operations to get it right. Right now,
+we've got ~inuse'~ = ~inuse1~ ∪ ~inuse2~, but really, we need something like
+this:
+
+#+begin_src
+inuse' = (inuse1 ∪ inuse2) ∖ ((inuse ∖ inuse1) ∪ (inuse ∖ inuse2))
+#+end_src
+
+That is, any block from ~inuse~ that is not part of ~inuse1~ or ~inuse2~ needs
+to be subtracted from the final set of blocks.
+
+Can we do something similar to allow overlap of memory blocks in different branches?
+
+Well, after hurting my head for a while, I haven't found out how to do
+that. Perhaps someone else has a good idea at the meeting tomorrow.
