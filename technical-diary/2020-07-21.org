@@ -1,0 +1,238 @@
+#+TITLE: Loops and Ifs
+#+DATE: <2020-07-21 Tue>
+
+* Reusing Allocations
+
+Yesterday, I spent a long time wrapping my head around how to do the
+optimization for if-expressions that I wanted to. Today, I think I may finally
+have a solution that works for both if-expressions and for-expressions, while
+keeping everything nice and tight.
+
+Let's start with my data types:
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+  type LastUseMap = Map VName (Set VName)                       -- ref:lastusemap
+
+  type InUse = Set VName                                             -- ref:inuse
+
+  type LastUsed = Set VName                                          -- ref:inuse
+
+  type MemGraph = Graph VName                                        -- ref:graph
+#+end_src
+
+In addition to the ~LastUseMap~, ~InUse~ and the ~MemGraph~ I introduced
+[[file:2020-07-20.org::(graph)][yesterday]], I now also want to keep track of ~LastUsed~. This is the set of
+memory blocks that have reached their last use in a statement of a body.
+
+Now, contrary to earlier versions of this algorithm, I'll actually have to
+describe in more detail how ~analyseBody~ will work. Here is the pseudocode:
+
+#+begin_verse
+~analyseBody :: LastUseMap -> Stms -> (InUse, LastUsed, MemGraph, Stms)~
+~analyseBody lumap stms~ =
+  let ~inuse~ = ∅
+  let ~graph~ = ∅
+  let ~lus~ = ∅
+  let ~stms'~ = ~[]~
+  for each ~stm~ in ~stms~:
+    let (~inuse~, ~lus'~, ~graph~, ~stm'~) = ~analyseStm lumap inuse graph stm~
+    let ~lus~ = ~lus~ ∪ ~lus'~
+    push ~stm'~ to ~stms'~
+  return (~inuse~ ~lus~, ~graph~, ~stms'~)
+#+end_verse
+
+In particular, any time we start analysing a new body, we'll start with a fresh
+~graph~ and ~inuse~. That means we have to unify the resulting graph with the
+previous graph after the call to ~analyseBody~, but it will allow us to discern
+between what is used in different branches of an if-expression.
+
+Now, let's take a look at ~analyseStm~[fn:1]:
+
+#+begin_verse
+~analyseStm :: LastUseMap -> InUse -> MemGraph -> Stm -> (InUse, LastUsed, MemGraph, Stm)~
+~analyseStm~ ~lu_map~ ~inuse~ ~graph~ (let ~p~ = ~exp~) =
+  let (~inuse_new~, ~lus_new~, ~graph_new~, ~stm_new~) =
+    if ~exp~ is a loop with body ~b~ then
+      let (~inuse'~, ~lus~, ~graph'~, ~b'~) = ~analyseBody~ ~lu_map~ ~b~
+      let ~graph''~ = ~graph~ ∪ ~graph'~ ∪ (~inuse~ ↔ (~inuse'~ ∪ ~lus~))
+      let ~inuse''~ = ~inuse~ ∖ ~lus~ ∪ ~inuse'~
+      in (~inuse''~, ~lus~, ~graph''~, ~graph'~, let ~p~ = ~exp~ with ~b'~)
+    else if ~exp~ is a if with bodies ~b1~, ~b2~ then
+      let (~inuse1~, ~lus1~, ~g1~, ~b1'~) = ~analyseBody~ ~lu_map~ ~b1~
+      let (~inuse2~, ~lus2~, ~g2~, ~b2'~) = ~analyseBody~ ~lu_map~ ~b2~
+      let ~lus~ = ~lus1~ ∪ ~lus2~
+      let ~inuse'~ = (~inuse~ ∪ ~inuse1~ ∪ ~inuse2~) ∖ ~lus~
+      let ~g~ = ~graph~ ∪ ~g1~ ∪ ~g2~
+                ∪ ((~inuse1~ ∪ ~lus1~) ↔ (~inuse~ ∖ (~lus2~ ∖ ~lus1~)))
+                ∪ ((~inuse2~ ∪ ~lus2~) ↔ (~inuse~ ∖ (~lus1~ ∖ ~lus2~)))
+      in (~inuse'~, ~lus~, ~g~, let ~p~ = ~exp~ with ~b1'~ and ~b2'~)
+    else if ~exp~ is a kernel call with a body ~b~ then
+      same as loop†
+    else
+      let ~lus~ = lookup ~p~ in ~lu_map~
+      let ~lus_mems~ = memory blocks referenced in ~lus~
+      let ~inuse'~ = ~inuse~ ∖ ~lus_mems~
+      in (~inuse''~, ~lus_mems~, ~graph~, ~stm~)
+
+  let ~mems~ = memory blocks referenced in ~p~
+  let ~inuse_end~ = ~inuse_new~ ∪ ~mems~
+  let ~graph_end~ = ~graph_new~ ∪ (~inuse_end~ ↔ ~inuse_end~)
+  in (~inuse_end~, ~lus_new~, ~graph_end~, ~stm_new~)
+#+end_verse
+
+†: Just as we can get in trouble if we reuse an external memory block inside a
+loop, I suspect I can get in similar trouble if I do the same inside a
+kernel. If not, we can simplify a bit here.
+
+There's a lot going on here. First of all, because we're now looking at memory
+initalizations instead of memory allocations, we need to look at every
+expression to see if a new memory block is introduced in the pattern. After
+handling the specific type of expression, we add any new memory blocks to the
+~InUse~ set and update the graph accordingly.
+
+Secondly, when handling loops, we add edges between any outside in-use memory
+blocks and all the memory blocks used within the loop body after procesing the
+loop body itself. Additionally, the resulting ~InUse~ is computed by removing
+any ~LastUsed~ from the previous ~InUse~ set and adding the blocks from the loop
+body ~InUse~ set instead.
+
+When handling if-expressions, we analyse each branch body separately, with fresh
+graphs and ~InUse~ sets. The resulting ~LastUsed~ set is the union of the
+~LastUsed~ from each branch. The resulting ~InUse~ is the union of the previous
+~InUse~ and the ~InUse~ from each branch, minus any memory blocks in the updated
+~LastUsed~. Remember, that if a memory block is last-used in one branch of an
+if, it is either last-used or not used at all in the other branch, and as long
+as one branch contains a last-use of a kernel block, it is out of use after the
+if-expression. The updated graph is a little bit more complicated to
+compute. First, remember that in this case we can think of a graph simply as a
+set of edges. The resulting graph is at least the union of the previous graph
+and the graphs from each branch. But we also want to add edges between all
+memory block that was in use before the if-expression and all memory blocks that
+were used inside the expression, /except/ for memory blocks that are last-used
+in one branch but not another. In those cases, we want to add edges in the
+branch that has the last-use, but not the other. For instance, to compute the
+edges between outside memory blocks and memory blocks in branch 1, we take the
+set difference between the last-uses of branch 2 and branch 1: if there is a
+memory block that is last-used in branch 2 but not in branch 1 it will be part
+of that set. Then that set is subtracted from the previous ~InUse~ to get all
+the outside memory blocks that we want to add edges to for branch 1. Finally
+edges those memory blocks and all memory blocks used in branch 1 are created.
+
+That was a mouthful, but I think it should work.
+
+Let's also try to write an updated ~optimiseStm~. First, our ~Allocs~
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+type Allocs = Set (VName, SubExp, Space)
+#+end_src
+
+#+begin_verse
+~optimiseStm :: MemGraph -> Allocs -> Stm -> (MemGraph, Allocs, Stm)~
+~optimiseStm~ ~graph~ ~allocs~ (let ~p~ = ~exp~) =
+  if ~exp~ is an allocation then
+    if there is a memory block ~x~ in ~allocs~ with the right size and space, there is no edge between ~x~ and ~p~ in ~graph~ then
+      let ~graph'~ = ~graph~ with nodes for ~x~ and ~p~ merged under the name ~x~
+      return (~graph'~ , ~allocs~, let ~p~ = ~x~)
+    else
+      return (~graph~, ~allocs~ with (~p~, size of allocation, space), let ~p~ = ~exp~)
+  else if ~exp~ is an if with branches ~b1~, ~b2~ then
+    let (~graph'~, ~allocs'~, ~b1'~) = ~optimiseBody~ ~graph~ ~allocs~ ~b1~
+    let (~graph''~, ~allocs''~, ~b2'~) = ~optimiseBody~ ~graph'~ ~allocs'~ ~b2~
+    return (~graph''~, ~allocs''~, let ~p~ = ~exp~ with ~b1'~, ~b2'~)
+  else if ~exp~ contains a body of stms (ie. introduces a scope) ~b~ then
+    let (~graph'~, ~allocs'~, ~b'~) = ~optimiseBody~ ~graph~ ~allocs~ ~b~
+    return (~graph'~, ~allocs'~, let ~p~ = ~exp~ with ~b'~)
+  else
+    return (~graph~, ~allocs~, let ~p~ = ~exp~)
+#+end_verse
+
+* More complications
+
+After a short talk with Troels, some additional information has come to light:
+First of all, inside kernels, we can make all memory blocks the same size, if we
+want to, simply by allocating ~max~ of the sizes in question. Therefore, the
+task in ~optimiseStm~ isn't so much about finding other blocks of the right
+size, it's more about finding out which memory blocks we want to merge to get
+the minimal number of allocations.
+
+Second of all, because uses of memory blocks inside kernels do not necessarily
+have the same size, we have to be careful when merging them. Therefore, Troels
+suggested using two passes: One that only looks at kernels, which is not
+re-entrant and which runs before allocations are hoisted, and one that runs on
+the rest of the program and which can run afterwards.
+
+Wait, I don't understand this at all...
+
+* Expand Allocations
+
+Okay, here's the problem: The expand allocations pass creates weird index
+functions inside kernels that are hard to reason about.
+
+~ExpandAllocations~ is a pass that unifies memory allocations across
+kernels. Consider the following kernel:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+SegMap_n {
+  let xs_mem = alloc x
+  let xs@xs_mem = ...
+  ...
+  let ys_mem = alloc y
+  let ys@ys_mem = ...
+}
+#+end_src
+
+The allocations inside the SegMap (which maps across ~n~ threads of size ~n~),
+are completely independent of each other, and my optimisation would possibly be
+able to merge them. However, if our pass happens after the ~ExpandAllocations~
+pass, the code will look like this:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let xs_mem = alloc (x * n)
+let ys_mem = alloc (y * n)
+
+SegMap_n {
+  let xs@xs_mem = ...
+  ...
+  let ys@ys_mem = ...
+}
+#+end_src
+
+where ~xs~ and ~ys~ have weird index functions that offsets them within their
+respective memory allocations. Now, the threads are not independent of each
+other, and in particular if ~ys~ has different stride than ~xs~, merging
+~xs_mem~ and ~ys_mem~ could cause writes to ~ys~ to overwrite different parts of
+~xs~ than just those that have gone out of scope in this thread.
+
+By doing our optimisation before the ~ExpandAllocations~ pass, and only on
+kernels, we can merge those allocations before-hand, and let the
+~ExpandAllocations~ pass worry about generalising the index functions.
+
+Another problem is kernels with access to global memory or manual
+indexing. If any of that happens, we probably need to avoid merging those
+blocks, at least for now, because it's hard to reason about safety. Therefore,
+our pass should only concern itself with memory allocations and array
+initializations that take place within the kernel in question.
+
+* Meeting
+
+Meetings change everything, every time! I have to be conservative in loops and
+maps and such. Because there can be all sorts of manual indexing and global
+array accesses inside loops, maps, and so on, we probably have to have any
+memory blocks inside the body interfere with the result of the body.
+
+Cosmin pointed out that OptionPricing.fut is the benchmark I'm really trying to
+get at, and for that we may need some heuristics for handling indexing inside
+loops/kernels, but for now I think it's better to keep it simple.
+
+The other point that came out is that we all that kernels are the most
+interesting part, and so I should try to focus on optimising them first. It was
+also accepted that my kernel pass will happen before ~ExpandAllocations~, which
+will help immensely.
+
+So, what's the plan now? Write a new algorithm, which only looks at kernels, and
+which tries to build the interference graph for it.
+
+* Footnotes
+
+[fn:1] U ↔ V here is the graph with edges from each element in U to all
+elements in V. Think cartesian product.
