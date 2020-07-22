@@ -41,6 +41,15 @@
       pre.src { overflow: auto; }
     /*]]>*/
    </style>"
+             :html-self-link-headlines t
+             :html-allow-name-attribute-in-anchors t
+             ;; :html-html5-fancy t
+             :html-link-home "/index.html"
+             :html-link-up ""
+             :html-home/up-format "<div id=\"org-div-home-and-up\">
+ %s
+ <a accesskey=\"H\" href=\"%s\"> HOME </a>
+</div>"
              )
 
         '("munksgaard.me-static"
