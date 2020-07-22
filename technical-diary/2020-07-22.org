@@ -1,0 +1,102 @@
+#+TITLE: 2020-07-22
+#+DATE: <2020-07-22 Wed>
+
+* Where we stand
+
+So, what's the status?
+
+For now, we're only concerned with kernels. We know that all allocations and
+array initializations that we have to look at take place inside those kernels.
+Allocations can still be hoisted to the top of the kernel, and we preferably
+still want to be able to run the pass multiple times, but not after the
+~ExpandAllocations~ pass has run. In addition, we should be a bit more
+conservative when creating our interference graph for loops and nested kernels.
+
+This means that we are mostly concerned with kernels that look like this:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+SegMap_n {
+  let xs_mem = alloc x
+  let xs@xs_mem = ...
+  ...
+  let ys_mem = alloc y
+  let ys@ys_mem = ...
+}
+#+end_src
+
+Although it can also be a nested map with an outer ~SegMapGroup~. So let's
+imagine we have a pass that runs through the program, and then when it hits a
+kernel it runs the ~analyseBody~ and ~optimiseBody~ functions from yesterday.
+
+Let's paste it here as well, so we know what we're talking about:
+
+#+begin_verse
+~analyseStm :: LastUseMap -> InUse -> MemGraph -> Stm -> (InUse, LastUsed, MemGraph, Stm)~
+~analyseStm~ ~lu_map~ ~inuse~ ~graph~ (let ~p~ = ~exp~) =
+  let (~inuse_new~, ~lus_new~, ~graph_new~, ~stm_new~) =
+    if ~exp~ is a loop with body ~b~ then
+      let (~inuse'~, ~lus~, ~graph'~, ~b'~) = ~analyseBody~ ~lu_map~ ~b~
+      let ~graph''~ = ~graph~ ∪ ~graph'~ ∪ (~inuse~ ↔ (~inuse'~ ∪ ~lus~))
+      let ~inuse''~ = ~inuse~ ∖ ~lus~ ∪ ~inuse'~
+      in (~inuse''~, ~lus~, ~graph''~, ~graph'~, let ~p~ = ~exp~ with ~b'~)
+    else if ~exp~ is a if with bodies ~b1~, ~b2~ then
+      let (~inuse1~, ~lus1~, ~g1~, ~b1'~) = ~analyseBody~ ~lu_map~ ~b1~
+      let (~inuse2~, ~lus2~, ~g2~, ~b2'~) = ~analyseBody~ ~lu_map~ ~b2~
+      let ~lus~ = ~lus1~ ∪ ~lus2~
+      let ~inuse'~ = (~inuse~ ∪ ~inuse1~ ∪ ~inuse2~) ∖ ~lus~
+      let ~g~ = ~graph~ ∪ ~g1~ ∪ ~g2~
+                ∪ ((~inuse1~ ∪ ~lus1~) ↔ (~inuse~ ∖ (~lus2~ ∖ ~lus1~)))
+                ∪ ((~inuse2~ ∪ ~lus2~) ↔ (~inuse~ ∖ (~lus1~ ∖ ~lus2~)))
+      in (~inuse'~, ~lus~, ~g~, let ~p~ = ~exp~ with ~b1'~ and ~b2'~)
+    else if ~exp~ is a kernel call with a body ~b~ then
+      same as loop†
+    else
+      let ~lus~ = lookup ~p~ in ~lu_map~
+      let ~lus_mems~ = memory blocks referenced in ~lus~
+      let ~inuse'~ = ~inuse~ ∖ ~lus_mems~
+      in (~inuse''~, ~lus_mems~, ~graph~, ~stm~)
+
+  let ~mems~ = memory blocks referenced in ~p~
+  let ~inuse_end~ = ~inuse_new~ ∪ ~mems~
+  let ~graph_end~ = ~graph_new~ ∪ (~inuse_end~ ↔ ~inuse_end~)
+  in (~inuse_end~, ~lus_new~, ~graph_end~, ~stm_new~)
+#+end_verse
+
+The first thing we need to do, is make sure any memory blocks referenced in ~p~
+interferes with the memory blocks inside ~exp~.
+
+#+begin_verse
+~analyseStm :: LastUseMap -> InUse -> MemGraph -> Stm -> (InUse, LastUsed, MemGraph, Stm)~
+~analyseStm~ ~lu_map~ ~inuse0~ ~graph0~ (let ~p~ = ~exp~) =
+  let ~mems~ = memory blocks referenced in ~p~
+  let ~inuse~ = ~inuse0~ ∪ ~mems~
+  let ~graph~ = ~graph0~ ∪ (~inuse~ ↔ ~inuse~)
+
+  if ~exp~ is a loop with body ~b~ then
+    let (~inuse'~, ~lus~, ~graph'~, ~b'~) = ~analyseBody~ ~lu_map~ ~b~
+    let ~graph''~ = ~graph~ ∪ ~graph'~ ∪ (~inuse~ ↔ (~inuse'~ ∪ ~lus~))
+    let ~inuse''~ = ~inuse~ ∖ ~lus~ ∪ ~inuse'~
+    in (~inuse''~, ~lus~, ~graph''~, ~graph'~, let ~p~ = ~exp~ with ~b'~)
+  else if ~exp~ is a if with bodies ~b1~, ~b2~ then
+    let (~inuse1~, ~lus1~, ~g1~, ~b1'~) = ~analyseBody~ ~lu_map~ ~b1~
+    let (~inuse2~, ~lus2~, ~g2~, ~b2'~) = ~analyseBody~ ~lu_map~ ~b2~
+    let ~lus~ = ~lus1~ ∪ ~lus2~
+    let ~inuse'~ = (~inuse~ ∪ ~inuse1~ ∪ ~inuse2~) ∖ ~lus~
+    let ~g~ = ~graph~ ∪ ~g1~ ∪ ~g2~
+              ∪ ((~inuse1~ ∪ ~lus1~) ↔ (~inuse~ ∖ (~lus2~ ∖ ~lus1~)))
+              ∪ ((~inuse2~ ∪ ~lus2~) ↔ (~inuse~ ∖ (~lus1~ ∖ ~lus2~)))
+    in (~inuse'~, ~lus~, ~g~, let ~p~ = ~exp~ with ~b1'~ and ~b2'~)
+  else if ~exp~ is a kernel call with a body ~b~ then
+    same as loop†
+  else
+    let ~lus~ = lookup ~p~ in ~lu_map~
+    let ~lus_mems~ = memory blocks referenced in ~lus~
+    let ~inuse'~ = ~inuse~ ∖ ~lus_mems~
+    in (~inuse''~, ~lus_mems~, ~graph~, ~stm~)
+#+end_verse
+
+That should do it.
+
+I kinda want to just go ahead and implement this now...
+
+Well, it didn't happen today. I think I'll jump into it tomorrow.
