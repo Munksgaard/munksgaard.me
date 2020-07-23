@@ -38,7 +38,7 @@ Let's paste it here as well, so we know what we're talking about:
       let (~inuse'~, ~lus~, ~graph'~, ~b'~) = ~analyseBody~ ~lu_map~ ~b~
       let ~graph''~ = ~graph~ ∪ ~graph'~ ∪ (~inuse~ ↔ (~inuse'~ ∪ ~lus~))
       let ~inuse''~ = ~inuse~ ∖ ~lus~ ∪ ~inuse'~
-      in (~inuse''~, ~lus~, ~graph''~, ~graph'~, let ~p~ = ~exp~ with ~b'~)
+      in (~inuse''~, ~lus~, ~graph''~, let ~p~ = ~exp~ with ~b'~)
     else if ~exp~ is a if with bodies ~b1~, ~b2~ then
       let (~inuse1~, ~lus1~, ~g1~, ~b1'~) = ~analyseBody~ ~lu_map~ ~b1~
       let (~inuse2~, ~lus2~, ~g2~, ~b2'~) = ~analyseBody~ ~lu_map~ ~b2~
@@ -76,7 +76,7 @@ interferes with the memory blocks inside ~exp~.
     let (~inuse'~, ~lus~, ~graph'~, ~b'~) = ~analyseBody~ ~lu_map~ ~b~
     let ~graph''~ = ~graph~ ∪ ~graph'~ ∪ (~inuse~ ↔ (~inuse'~ ∪ ~lus~))
     let ~inuse''~ = ~inuse~ ∖ ~lus~ ∪ ~inuse'~
-    in (~inuse''~, ~lus~, ~graph''~, ~graph'~, let ~p~ = ~exp~ with ~b'~)
+    in (~inuse''~, ~lus~, ~graph''~, let ~p~ = ~exp~ with ~b'~)
   else if ~exp~ is a if with bodies ~b1~, ~b2~ then
     let (~inuse1~, ~lus1~, ~g1~, ~b1'~) = ~analyseBody~ ~lu_map~ ~b1~
     let (~inuse2~, ~lus2~, ~g2~, ~b2'~) = ~analyseBody~ ~lu_map~ ~b2~
