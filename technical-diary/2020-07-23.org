@@ -1,0 +1,60 @@
+#+TITLE: 2020-07-23
+#+DATE: <2020-07-23 Thu>
+
+* Let's implement some stuff
+
+Actually, when running ~analyseStm~ and ~analyseBody~, I don't think I need to
+actually update any statements? So I don't need to return an updated statement
+or body.
+
+In ~if~ and ~loop~ expressions, I probably also have to handle parameters in the
+conditional and loop initialization/form, respectively. The names in there
+should interfere with the names in the bodies/body and with the names in the
+pattern.
+
+#+begin_verse
+~analyseBody :: LastUseMap -> Stms -> (InUse, LastUsed, MemGraph)~
+~analyseBody lumap stms~ =
+  let ~inuse~ = ∅
+  let ~graph~ = ∅
+  let ~lus~ = ∅
+  for each ~stm~ in ~stms~:
+    let (~inuse~, ~lus'~, ~graph~) = ~analyseStm lumap inuse graph stm~
+    let ~lus~ = ~lus~ ∪ ~lus'~
+  return (~inuse~, ~lus~, ~graph~)
+#+end_verse
+
+#+begin_verse
+~analyseStm :: LastUseMap -> InUse -> MemGraph -> Stm -> (InUse, LastUsed, MemGraph)~
+~analyseStm~ ~lu_map~ ~inuse0~ ~graph0~ (let ~p~ = ~exp~) =
+  let ~mems~ = memory blocks referenced in ~p~
+  let ~inuse~ = ~inuse0~ ∪ ~mems~
+  let ~graph~ = ~graph0~ ∪ (~inuse~ ↔ ~inuse~)
+  let ~lus0'~ = lookup ~p~ in ~lu_map~
+  let ~lus0~ = memory blocks referenced in ~lus~
+
+  if ~exp~ is a loop with body ~b~ then
+    let (~inuse'~, ~lus~, ~graph'~) = ~analyseBody~ ~lu_map~ ~b~
+    let ~lus'~ = ~lus~ ∪ ~lus0~
+    let ~graph''~ = ~graph~ ∪ ~graph'~ ∪ (~inuse~ ↔ (~inuse'~ ∪ ~lus~))
+    let ~inuse''~ = ~inuse~ ∖ ~lus~ ∪ ~inuse'~
+    in (~inuse''~, ~lus'~, ~graph''~)
+  else if ~exp~ is a if with bodies ~b1~, ~b2~ then
+    let (~inuse1~, ~lus1~, ~g1~) = ~analyseBody~ ~lu_map~ ~b1~
+    let (~inuse2~, ~lus2~, ~g2~) = ~analyseBody~ ~lu_map~ ~b2~
+    let ~lus~ = ~lus0~ ∪ ~lus1~ ∪ ~lus2~
+    let ~inuse'~ = (~inuse~ ∪ ~inuse1~ ∪ ~inuse2~) ∖ ~lus~
+    let ~g~ = ~graph~ ∪ ~g1~ ∪ ~g2~
+              ∪ ((~inuse1~ ∪ ~lus1~) ↔ (~inuse~ ∖ (~lus2~ ∖ ~lus1~)))
+              ∪ ((~inuse2~ ∪ ~lus2~) ↔ (~inuse~ ∖ (~lus1~ ∖ ~lus2~)))
+    in (~inuse'~, ~lus~, ~g~)
+  else if ~exp~ is a kernel call with a body ~b~ then
+    same as loop†
+  else
+    let ~inuse'~ = ~inuse~ ∖ ~lus0~
+    in (~inuse'~, ~lus0~, ~graph~)
+#+end_verse
+
+Some more work got done. At the end, I tried to get a proper inference-graph for
+my ~if.fut~ test. For some reason ~mem_37~ never runs out of scope, so
+somethings wrong. I also need to actually make my analysis only work on kernels.
