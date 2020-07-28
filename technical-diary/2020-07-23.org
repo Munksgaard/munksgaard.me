@@ -56,5 +56,5 @@ pattern.
 #+end_verse
 
 Some more work got done. At the end, I tried to get a proper inference-graph for
-my ~if.fut~ test. For some reason ~mem_37~ never runs out of scope, so
-somethings wrong. I also need to actually make my analysis only work on kernels.
+my ~if.fut~ test. For some reason ~mem_37~ never runs out of scope, so something
+is wrong. I also need to actually make my analysis only work on kernels.
