@@ -1,0 +1,157 @@
+#+TITLE: 2020-07-27
+#+DATE: <2020-07-27 Mon>
+
+* More implementation
+
+Let's see if we can't get that inference graph working. On Thursday, we had a
+problem in ~if.fut~ with ~mem_37~ never going out of scope.
+
+Here is the problem:
+
+#+begin_src futhark
+  if cond_29
+  then {mem_37, xs_27} else {
+    let {mem mem_40} =
+      alloc(bytes_35)
+    -- res_31 : [n_18]i32@@mem_40->
+    -- {base: [n_18]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+    --                                           rotates: [0i32]; shape: [n_18];
+    --                                           permutation: [0];
+    --                                           monotonicity: [Inc]}]}
+    let {[n_18]i32 res_31} = iota32(n_18, 0i32, 1i32)
+    in {mem_40, res_31}
+  }
+#+end_src
+
+Because ~mem_37~ is returned from the then-branch, and because a body return is
+not part of a statement, ~mem_37~ is never last used in the reported last-use
+map. Furthermore, because bodies in if-expressions don't really have a ~VName~
+associated with it, the only alternative is to associate the last-use of
+~mem_37~ with the statement binding to the ~if~ expression, but then we have no
+way of distinguishing between which branch a memory block is last-used in...
+
+In other words, I'm not sure I can actually even do the ~if~-optimization I was
+working on, with the current last-use representation.
+
+Another problem is that ~mem_37~ really should be reported as last-used at some
+point. Otherwise we'll never be able to reuse it later. I think the problem is
+that my last-use ~analyseExp~ is not correct. Let's try to investigate.
+
+Currently, ~analyseExp~ takes as arguments a ~LastUseMap~, a ~UsedNames~ and and
+expression with aliasing information and returns ~(Names, LastUseMap,
+UsedNames)~. Some questions immediately present themselves: What is the
+~LastUseMap~ given as input used for? What is the difference between the ~Names~
+and the ~UsedNames~ results?
+
+It doesn't look the like ~LastUseMap~ input is really used for anything. It's
+convenient that ~analyseStm~ takes a ~(LastUseMap, UsedNames)~ as input and as
+output, because we can then ~foldr~ over it as part of ~analyseKernelBody~, but
+shouldn't we really be calling ~analyseBody~ inside ~analyseKernelBody~, or at
+least ~analyseStms~ instead of manually folding over the statements? I think
+yes.
+
+The one problem with changing this is that I haven't made any tests for the
+last-use analysis... Let's disregard that for now, and boldly move forward.
+
+Next question: What is the purpose of ~Names~ and ~UsedNames~ inside
+~analyseExp~? The answer here relates to the fact that expressions can contain
+bodies of code, and the names that are last-used inside the body of code is not
+last-used in the outside expression, but it should be part of the set of used
+names. One good question however: Perhaps values last-used in a nested
+expression should also be mapped to the outside expression? Let's investigate
+with an example:
+
+#+begin_src futhark
+let z = -- last use of xs and ys?
+  if ... then
+    let x = xs[0] -- last use of xs
+    in x
+  else
+    let y = ys[0] -- last use of ys
+    in y
+#+end_src
+
+The question here is, should we amend the ~LastUseMap~ to contain ~(z, [xs,
+ys])~ in addition to ~(x, [xs])~ and ~(y, [ys])~? Doing so would mean that the
+~LastUseMap~ is no longer context-free or unambiguous: ~ys~ would appear as
+last-used in multiple places, and only by knowing the context (the last-use of
+~ys~ associated with ~z~ means that ~ys~ is last-used inside the block used to
+compute ~z~) can we use the map correctly.
+
+What would it mean for the following code:
+
+#+begin_src futhark
+let z = -- last use of xs and ys?
+  if ... then
+    xs -- last use of xs
+  else
+    ys -- last use of ys
+#+end_src
+
+Here, we cannot actually, in the ~LastUseMap~, associate ~xs~ with the correct
+place inside the then-branch, but we can associate it with ~z~.
+
+A hybrid approach is also possible, where values that are returned from bodies
+are reported as last-used in the parent statement, but otherwise not.
+
+Upon looking at ~ReuseAllocations~, I think I need the hybrid approach for
+now. In particular, when creating the interference map for an if-expression, I
+have no way of knowing when a value that is returned from a body is last used,
+if they don't appear anywhere.
+
+Also, why is ~mem_40~ being reported as in use after the ~if~ expression in
+which it's created? It should never be allowed to leave the scope.
+
+I need to clear my mind. Let's try to start over with the interference graph
+algorithm.
+
+/Conservative rule/: for ~let p = exp~, everything inside ~exp~ should interfere
+with everything in ~p~
+
+/InUse rule/: For simplicity ~InUse~ is only added to from ~p~, and removed
+from using the ~LastUseMap~ of ~p~.
+
+It was convenient to have ~analyseStm~ and ~analyseBody~ return both ~InUse~ and
+~LastUsed~ because those encompass every name referenced inside.
+
+We used that to create the extra interference necessary to handle loops
+correctly. That corresponds with out conservative rule. Is there a general way
+to do this that doesn't require returning both InUse and LastUsed? Really, we're
+only interested in the graph from inside a body (since any new allocations
+should not leak to the outside(?)), and whatever is in-use at the end. Because
+of the loop, I think it makes sense to still return ~InUse~ and ~LastUsed~, but
+setting ~InUse_new~ = ~InUse_inner~ ∩ ~InUse_prev~ going forward. What about
+nested loops though? That means we still have to keep track of ~LastUsed~ as
+well, I think... And those things that that were not in the intersection between
+~InUse_inner~ and ~InUse_prev~... Perhaps it's easier to just have ~InUse~ and
+~UsedNames~? That should make the design a bit simpler, and since we've already
+given up on my ~if~ optimization, I don't think we need ~LastUsed~. Let's try it...
+
+#+begin_verse
+~analyseStm :: LastUseMap -> InUse -> Stm -> (InUse, UsedNames, MemGraph)~
+~analyseStm~ ~lumap~ ~inuse0~ (let ~p~ = ~exp~) =
+  let ~new_mems~ = memory blocks referenced in ~p~
+  let ~graph~ = ~inuse~ ↔ ~inuse~
+  let ~lus0~ = lookup ~p~ in ~lumap~
+  let ~lus~ = memory blocks referenced in ~lus0~
+  let ~inuse~ = (~inuse0~ ∪ ~mems~) ∩ ~lus~
+
+  if ~exp~ is a loop with body ~b~ then
+    let (~inuse'~, ~used~, ~graph'~) = ~analyseBody~ ~lumap~ ~b~
+    let ~graph''~ = ~graph~ ∪ ~graph'~ ∪ (~inuse~ ↔ ~used~)
+    let ~inuse''~ = ~inuse'~ ∩ ~inuse~
+    in (~inuse''~, ~used~ ∪ ~inuse~, ~graph''~)
+  if ~exp~ is an if with bodies ~b1~, ~b2~ then
+    let (~inuse_then~, ~used_then~, ~graph_then~) = ~analyseBody~ ~lumap~ ~b1~
+    let (~inuse_else~, ~used_else~, ~graph_else~) = ~analyseBody~ ~lumap~ ~b2~
+    let ~used~ = ~used_then~ ∪ ~used_else~ ∪ ~inuse~
+    let ~inuse'~ = (~inuse_then~ ∪ ~inuse_else~) ∩ ~inuse~
+    let ~graph'~ = ~graph~ ∪ ~graph_then~ ∪ ~graph_else~ ∪ (~inuse'~ ↔ (~used_then~ ∪ ~used_else~)) <-
+    in (~inuse'~, ~used~, ~graph'~)
+  else
+    (~inuse~, ~inuse~, ~graph~)
+
+#+end_verse
+
+argh, problems. Right now, things that are inuse before, but not inside an if,
+is not inuse after the if.
