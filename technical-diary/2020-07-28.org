@@ -1,0 +1,27 @@
+#+TITLE: 2020-07-28
+#+DATE: <2020-07-28 Tue>
+
+* Why am I trying to do interference and graph coloring?
+
+The linear scan algorithm cannot assumes that all variables have a single live
+interval. According to Cosmin, we want something which is re-entrant. But that
+would also mean that we should be able to handle cases where the code is moved
+around after our initial pass, for instance creating an opportunity to merge a
+memory block with another memory block, where the former is entirely contained
+within two uses of the latter. The linear scan algorithm does not handle such
+cases. Or rather, an implementation of linear scan for my problem which mainly
+concerns itself with memory blocks, cannot handle such cases. We'd need to only
+concern ourselves with arrays. But arrays in the explicit memory IR are pretty
+much single-use
+
+* Working on LastUse
+
+I wanted to improve the handling of aliasing in my LastUse
+analysis. Unfortunately, I now see that the consumed things are not connected to
+the thing that consumes them. It is probably unknowable. I think instead I
+disregard consumes, and just look at the memory blocks instead.
+
+However, I can improve the handling of aliases. One way to do so is to use an
+inverse last-use map in the LastUse analysis, and then revert it after the map
+has been produced. Then, each time I come upon a pattern that aliases another
+operation, I can insert the aliased name at the correct last use point.
