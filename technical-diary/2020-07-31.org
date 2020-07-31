@@ -1,0 +1,247 @@
+#+TITLE: 2020-07-31
+#+DATE: <2020-07-31 Fri>
+
+* Testing futhark
+
+Currently, the only way to test much of the Futhark compiler is by writing a
+Futhark program and verify that the compiled code behaves as
+expected. I think this is generally called integration tests. Sometimes,
+however, you want slightly more fine-grained testing. For instance, now that I'm
+working on my interference graph, I'd like to write a test that says: Take
+~psum.fut~, compute the interference graph for it, and compare it to some
+predefined value. However, there is currently no easy way to do that.
+
+One approach would be to write some functionality that allow us to write a
+Futhark program and compile it to a certain point within a unit test. That way,
+we could write:
+
+#+begin_export haskell -r -n
+let input = "let psum = scan (+) 0 let main (xss: [][]i32) = #[incremental_flattening(only_intra)] map (psum >-> psum >-> psum) xss"
+let prog = parseAndPrepare input
+let graph = computeInterferenceGraph prog
+assert(graph == [(mem_765, mem_769), (mem_769, mem_773)])
+#+end_export
+
+However, ~parseAndPrepare~ is going to do a non-trivial amount of work.
+
+Instead of trying to parse and process everything, we could also express the
+desired test IR directly in Haskell. That would look something like this:
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+let input = Prog Seq.Empty [FunDef Nothing mempty (nameFromString "psum") ....
+let graph = computerInterferenceGraph input
+assert(graph == [(mem_765, mem_769), (mem_769, mem_773)])
+#+end_src
+
+However, that seems /very/ cumbersome and error-prone. Consider the IR generated
+for ~psum.fut~:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+-- xss_247 : [impl₀_245][impl₁_246]i32@@xss_mem_759->
+-- {base: [impl₀_245, impl₁_246]; contiguous: True; LMADs: [{offset: 0i32;
+--                                                           strides: [impl₁_246, 1i32];
+--                                                           rotates: [0i32, 0i32];
+--                                                           shape: [impl₀_245, impl₁_246];
+--                                                           permutation: [0, 1];
+--                                                           monotonicity: [Inc, Inc]}]}
+entry {*[?0][?1]i32@?2->
+       {base: [?0, ?1]; contiguous: True; LMADs: [{offset: 0i32;
+                                                   strides: [?1, 1i32];
+                                                   rotates: [0i32, 0i32];
+                                                   shape: [?0, ?1];
+                                                   permutation: [0, 1];
+                                                   monotonicity: [Inc, Inc]}]}}
+main (mem xss_mem_759, i32 impl₀_245, i32 impl₁_246,
+      [impl₀_245][impl₁_246]i32 xss_247) = {
+  #[incremental_flattening(only_intra)]
+  let {i64 binop_x_774} = sext i32 impl₀_245 to i64
+  #[incremental_flattening(only_intra)]
+  let {i64 binop_y_775} = sext i32 impl₁_246 to i64
+  #[incremental_flattening(only_intra)]
+  let {i64 binop_x_776} = mul_nw64(binop_x_774, binop_y_775)
+  #[incremental_flattening(only_intra)]
+  let {i64 bytes_773} = mul_nw64(4i64, binop_x_776)
+  #[incremental_flattening(only_intra)]
+  let {mem mem_777} =
+    alloc(bytes_773)
+  let {i64 binop_x_763} = binop_y_775
+  let {i64 bytes_762} = mul_nw64(4i64, binop_y_775)
+  let {i64 binop_x_767} = binop_y_775
+  let {i64 bytes_766} = bytes_762
+  let {i64 binop_x_771} = binop_y_775
+  let {i64 bytes_770} = bytes_762
+  #[incremental_flattening(only_intra)]
+  -- res_408 : [impl₀_245][impl₁_246]i32@@mem_777->
+  -- {base: [impl₀_245, impl₁_246]; contiguous: True; LMADs: [{offset: 0i32;
+  --                                                           strides: [impl₁_246, 1i32];
+  --                                                           rotates: [0i32, 0i32];
+  --                                                           shape: [impl₀_245, impl₁_246];
+  --                                                           permutation: [0, 1];
+  --                                                           monotonicity: [Inc, Inc]}]}
+  let {[impl₀_245][impl₁_246]i32 res_408} =
+    segmap_group
+    (#groups=impl₀_245; groupsize=impl₁_246)
+    (gtid_292 < impl₀_245) (~phys_tid_305) : {[impl₁_246]i32} {
+      let {mem@local mem_764} =
+        alloc(bytes_762, @local)
+      -- resarr0_415 : [impl₁_246]i32@@mem_764->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_415} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_416, i32 x_417) =>
+            let {i32 res_418} = add32(x_416, x_417)
+            in {res_418}})
+        (gtid_295 < impl₁_246) (~phys_tid_296) : {i32} {
+          let {i32 x_419} = xss_247[gtid_292, gtid_295]
+          return {returns x_419}
+        }
+      let {mem@local mem_768} =
+        alloc(bytes_762, @local)
+      -- resarr0_425 : [impl₁_246]i32@@mem_768->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_425} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_426, i32 x_427) =>
+            let {i32 res_428} = add32(x_426, x_427)
+            in {res_428}})
+        (gtid_297 < impl₁_246) (~phys_tid_298) : {i32} {
+          let {i32 x_429} = resarr0_415[gtid_297]
+          return {returns x_429}
+        }
+      let {mem@local mem_772} =
+        alloc(bytes_762, @local)
+      -- resarr0_434 : [impl₁_246]i32@@mem_772->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_434} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_435, i32 x_436) =>
+            let {i32 res_437} = add32(x_435, x_436)
+            in {res_437}})
+        (gtid_299 < impl₁_246) (~phys_tid_300) : {i32} {
+          let {i32 x_438} = resarr0_425[gtid_299]
+          return {returns x_438}
+        }
+      return {returns resarr0_434}
+    }
+  in {impl₀_245, impl₁_246, mem_777, res_408}
+}
+#+end_src
+
+That's a /lot/ of IR to write by hand...
+
+Troels suggested having an alternative way to input IR (Futhark Core Language),
+for instance by defining an isomorphism with sexps. Then, we would input the IR
+as a sexp and could directly run our test functions on it. I found the
+[[https://hackage.haskell.org/package/sexp-grammar][sexp-grammar]] package, which should supposedly be able to help us do that, but
+unfortunately its dependencies clash with those of Futhark, and I don't know how
+to fix that. If it worked, however, we would be able to input an IR like this:
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+let input = parseSexp "(prog () (fun () () \"psum\" ....)"
+let graph = computerInterferenceGraph input
+assert(graph == [(mem_765, mem_769), (mem_769, mem_773)])
+#+end_src
+
+Still cumbersome and error-prone like the direct AST from above, but perhaps
+marginally better? Of course, everything breaks down if the AST changes, how are
+we supposed to handle that?
+
+For the record, this is the error I'm getting after adding
+~sexp-grammar >= 2.1.0~ to the ~build-depends~ in ~futhark.cabal~ and running
+~cabal build~:
+
+#+begin_src
+Resolving dependencies...
+cabal: Could not resolve dependencies:
+[__0] trying: futhark-0.17.0 (user goal)
+[__1] trying: template-haskell-2.16.0.0/installed-2.16.0.0 (dependency of
+futhark)
+[__2] trying: sexp-grammar-2.1.0 (dependency of futhark)
+[__3] next goal: prettyprinter (dependency of sexp-grammar)
+[__3] rejecting: prettyprinter-1.6.1 (conflict: sexp-grammar =>
+prettyprinter>=1 && <1.3)
+[__3] skipping: prettyprinter-1.6.0, prettyprinter-1.5.1, prettyprinter-1.5.0,
+prettyprinter-1.4.0, prettyprinter-1.3.0 (has the same characteristics that
+caused the previous version to fail: excluded by constraint '>=1 && <1.3' from
+'sexp-grammar')
+[__3] rejecting: prettyprinter-1.2.1.1, prettyprinter-1.2.1,
+prettyprinter-1.2.0.1, prettyprinter-1.2, prettyprinter-1.1.1,
+prettyprinter-1.1.0.1, prettyprinter-1.1, prettyprinter-1.0.1 (conflict:
+template-haskell => base==4.14.0.0/installed-4.14.0.0, prettyprinter =>
+base>=4.7 && <4.13)
+[__3] rejecting: prettyprinter-1 (conflict:
+template-haskell==2.16.0.0/installed-2.16.0.0, prettyprinter =>
+template-haskell>=2.9 && <2.12)
+[__3] rejecting: prettyprinter-0.1 (conflict: sexp-grammar => prettyprinter>=1
+&& <1.3)
+[__3] fail (backjumping, conflict set: prettyprinter, sexp-grammar,
+template-haskell)
+After searching the rest of the dependency tree exhaustively, these were the
+goals I've had most trouble fulfilling: base, sexp-grammar, futhark,
+prettyprinter, template-haskell
+Try running with --minimize-conflict-set to improve the error message.
+#+end_src
+
+So, while I can't get ~sexp-grammar~ to work, let's try and give it a go with
+the first approach, ~parseAndPrepare~.
+
+* ~parseAndPrepare~
+
+Well, this turned out to actually be somewhat reasonable... I'm reading and
+writing to a temporary file, but that should be okay, right?
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+pipeline :: Pipeline SOACS KernelsMem
+pipeline =
+  kernelsPipeline
+    >>> onePass Kernels.explicitAllocations
+    >>> passes
+      [ simplifyKernelsMem,
+        performCSE False
+      ]
+
+psumTest :: TestTree
+psumTest =
+  testCase "psum.fut" $ do
+    fp <- writeSystemTempFile "psum.fut" "let psum = scan (+) (0: i32) let main (xss: [][]i32) = #[incremental_flattening(only_intra)] map (psum >-> psum >-> psum) xss"
+    prog <- runFutharkM (runPipelineOnProgram newFutharkConfig pipeline fp) NotVerbose
+    case prog of
+      Right prog' ->
+        case Set.toList $ Interference.analyse prog' of
+          [(mem1, mem2), (mem2', mem3)] -> do
+            assertEqual "Some mems" mem2 mem2'
+            assertBool "Only two elements" (mem1 /= mem3)
+            assertBool "Only two elements" (mem1 /= mem2)
+            assertBool "Only two elements" (mem2 /= mem3)
+          _ ->
+            assertFailure "Interference graph invalid"
+      Left _ ->
+        assertFailure "Could not compile"
+#+end_src
+
+It's not robust at all, any changes to the optimisation passes might make the
+test fail for non-obvious reasons. But it should be good enough for now.
+
+So, now it's just a matter of writing more of those, and expanding on the
+intersection analysis.
