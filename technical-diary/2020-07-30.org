@@ -1,0 +1,231 @@
+#+TITLE: 2020-07-30
+#+DATE: <2020-07-30 Thu>
+
+* Status
+
+I've been slacking off a bit on the technical diary. Yesterday I didn't write
+anything at all, and the day before that only a few paragraphs. Let's try to
+improve that a bit.
+
+* Last Use
+
+So, what's the status? I've worked on improving my last-use analysis, to better
+handle aliasing, and altogether be more robust. This turned out to, not
+surprisingly, be necessary for linear scan/reusing allocations. My problems over
+the last couple of days have all stemmed from the fact that the return values of
+a~Body~ of code, say from an ~if~-expression, cannot be unambigiously associated
+with a statement. Consider the following piece of code:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let xs: [n]i32 = ...
+  let ys =
+    if b then
+      xs
+    else
+      iota n
+  let y = .. ys .. -- last use of ys, xs
+#+end_src
+
+The last syntactic use of ~xs~ is in the return from the then-branch of the ~if~
+expression, but there are no statements inside that branch. Instead, we can
+associate the last use of ~xs~ with the ~let ys~ statement, but then it's not
+clear whether it's last used in the then- or else-branch, or both. In the
+algorithm that I'd previously made, I assumed that I would always be able to
+determine which branch something was last-used in, which lead me to try to
+create an optimisation that would reuse the memory block of ~xs~ for the ~iota
+n~, in the above code. However, I think I have to abandon that idea for now, and
+instead focus on getting the simple cases to work.
+
+Besides, the real last use of ~xs~ is not inside the ~if~ expression, but
+actually at the same place as the last use of ~ys~. In order to be able to
+correctly determine the last use ~xs~, I need aliasing information. Fortunately,
+there already exists and ~Alias~ lore that attaches aliasing information in
+various places. In particular:
+
+ - Patterns elements in statements have a ~VarAliases~ attached, which indicates
+   which existing variables the pattern element aliases.
+ - Statements have a ~ConsumedInExp~ attached to their auxiliary information,
+   which indicates which values were consumed in the expression. As far as I can
+   tell, this is only ever used when using in-place updates.
+ - Bodies have a ~BodyAliasing~ attached. I'm not sure what this is for, it
+   seems to contain the same thing ~VarAliases~. Obviously, however, different
+   branches in an ~if~ expression can have different ~BodyAliasing~ information.
+ - Ops implement ~CanBeAliased~ and ~AliasedOp~, where ~AliasedOp~ contains
+   information about what is aliased inside, and what is consumed inside.
+
+Upon looking into ~BodyAliasing~, I have confirmed that it is actually the case
+that different branches in ~if~ expressions have different ~BodyAliasing~
+information. It may be possible to use this knowledge to do the optimisation I
+was talking about above, but let's get the other bits working first.
+
+From a last-use perspective, we really want to know, whenever something is
+last-used (the first occurrence of a variable when traversing the program
+statements in reverse order), it and /all of the variables it aliases/ should be
+marked as last-used. However, given the alias lore described above, we don't
+have the necessary aliasing information at that point. This lead me to create a
+sort of inverted last-use map, which is only used during the analysis, and which
+is then inverted at the end to produce the real last-use map. The inverse
+last-use map records for each variable, in which statement it was last
+used. In the example above, when we come upon the ~let y~ statement, we record
+that ~ys~ is last used in that statement. Later, in the ~let ys~ statement, we
+see that ~ys~ aliases ~xs~, so we look up the last use of ~ys~, which is ~y~,
+and record that the last use of ~xs~ is also ~y~.
+
+Now, given that, let's revisit ~ReuseAllocations~, and see how we can improve
+it.
+
+* Interference
+
+First of all, let's try to get this interference graph right. I've started by
+factoring the interference analysis out into its own module, called
+~Futhark.Analysis.Interference~.
+
+I think a good first step is to set up some tests of some sort. I currently have
+a bunch of different files in my ~tests~ directory, but no way of knowing what
+the correct output for each file is and why. Now, I know ~psum.fut~ is going to
+be one of my tests. Here's what the generated code with ~futhark-0.16.2 dev
+--kernels -a -e --cse~ looks like:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+-- xss_247 : [impl₀_245][impl₁_246]i32@@xss_mem_760->
+-- {base: [impl₀_245, impl₁_246]; contiguous: True; LMADs: [{offset: 0i32;
+--                                                           strides: [impl₁_246, 1i32];
+--                                                           rotates: [0i32, 0i32];
+--                                                           shape: [impl₀_245, impl₁_246];
+--                                                           permutation: [0, 1];
+--                                                           monotonicity: [Inc, Inc]}]}
+entry {*[?0][?1]i32@?2->
+       {base: [?0, ?1]; contiguous: True; LMADs: [{offset: 0i32;
+                                                   strides: [?1, 1i32];
+                                                   rotates: [0i32, 0i32];
+                                                   shape: [?0, ?1];
+                                                   permutation: [0, 1];
+                                                   monotonicity: [Inc, Inc]}]}}
+main (mem xss_mem_760, i32 impl₀_245, i32 impl₁_246,
+      [impl₀_245][impl₁_246]i32 xss_247) = {
+  #[incremental_flattening(only_intra)]
+  let {i64 binop_x_775} = sext i32 impl₀_245 to i64
+  #[incremental_flattening(only_intra)]
+  let {i64 binop_y_776} = sext i32 impl₁_246 to i64
+  #[incremental_flattening(only_intra)]
+  let {i64 binop_x_777} = mul_nw64(binop_x_775, binop_y_776)
+  #[incremental_flattening(only_intra)]
+  let {i64 bytes_774} = mul_nw64(4i64, binop_x_777)
+  #[incremental_flattening(only_intra)]
+  let {mem mem_778} =
+    alloc(bytes_774)
+  let {i64 binop_x_764} = binop_y_776
+  let {i64 bytes_763} = mul_nw64(4i64, binop_y_776)
+  let {i64 binop_x_768} = binop_y_776
+  let {i64 bytes_767} = bytes_763
+  let {i64 binop_x_772} = binop_y_776
+  let {i64 bytes_771} = bytes_763
+  #[incremental_flattening(only_intra)]
+  -- res_409 : [impl₀_245][impl₁_246]i32@@mem_778->
+  -- {base: [impl₀_245, impl₁_246]; contiguous: True; LMADs: [{offset: 0i32;
+  --                                                           strides: [impl₁_246, 1i32];
+  --                                                           rotates: [0i32, 0i32];
+  --                                                           shape: [impl₀_245, impl₁_246];
+  --                                                           permutation: [0, 1];
+  --                                                           monotonicity: [Inc, Inc]}]}
+  let {[impl₀_245][impl₁_246]i32 res_409} =
+    segmap_group
+    (#groups=impl₀_245; groupsize=impl₁_246)
+    (gtid_292 < impl₀_245) (~phys_tid_305) : {[impl₁_246]i32} {
+      let {mem@local mem_765} =
+        alloc(bytes_763, @local)
+      -- resarr0_416 : [impl₁_246]i32@@mem_765->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_416} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_417, i32 x_418) =>
+            let {i32 res_419} = add32(x_417, x_418)
+            in {res_419}})
+        (gtid_295 < impl₁_246) (~phys_tid_296) : {i32} {
+          let {i32 x_420} = xss_247[gtid_292, gtid_295]
+          return {returns x_420}
+        }
+      let {mem@local mem_769} =
+        alloc(bytes_763, @local)
+      -- resarr0_426 : [impl₁_246]i32@@mem_769->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_426} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_427, i32 x_428) =>
+            let {i32 res_429} = add32(x_427, x_428)
+            in {res_429}})
+        (gtid_297 < impl₁_246) (~phys_tid_298) : {i32} {
+          let {i32 x_430} = resarr0_416[gtid_297]
+          return {returns x_430}
+        }
+      let {mem@local mem_773} =
+        alloc(bytes_763, @local)
+      -- resarr0_435 : [impl₁_246]i32@@mem_773->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_435} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_436, i32 x_437) =>
+            let {i32 res_438} = add32(x_436, x_437)
+            in {res_438}})
+        (gtid_299 < impl₁_246) (~phys_tid_300) : {i32} {
+          let {i32 x_439} = resarr0_426[gtid_299]
+          return {returns x_439}
+        }
+      return {returns resarr0_435}
+    }
+  in {impl₀_245, impl₁_246, mem_778, res_409}
+}
+#+end_src
+
+Now, what I'm mostly interested in, is that ~mem_765~ should interfere with
+~mem_769~, but not ~mem_773~. On the other hand, ~mem_769~ and ~mem_773~ should
+interfere with each other. So, we want an interference graph that looks like
+this:
+
+#+begin_export haskell -r -n
+[(mem_765, mem_769), (mem_769, mem_773)]
+#+end_export
+
+To keep things simple, I'll only concern myself with kernels for now. Therefore,
+I've written an ~analyseKernels~ function, whose sole purpose is to walk through
+the program and find the kernels and call the actual analysis functions on
+those.
+
+Ah, but there are other memory blocks in that code! ~xss_mem_760~ is the block
+that the argument to ~main~, ~xss_247~, resides in. There is also ~mem_778~,
+which is where the result of the outer map is put.
+
+In principle, if ~xss_247~ was consumed by the function, we could reuse it's
+memory for other global memory blocks. However, since we're focusing on just
+kernels, perhaps we should actually disregard them entirely when doing the
+interference graph? A heuristic could be to only add blocks to the interference
+graph that actually are in ~InUse~.
+
+So, we still want the same interference graph.
+
+For some reason ~<&> namesIntersection inuse_inside~ removes all names from
+last_use_mems?
+
+That's all sorted out, and now I actually get the correct interference graph,
+for ~psum.fut~ at least.
