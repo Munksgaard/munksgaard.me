@@ -1,0 +1,51 @@
+#+TITLE: 2020-08-03
+#+DATE: <2020-08-03 Mon>
+
+* sexp-grammar
+
+I tried to experiment a bit with [[https://hackage.haskell.org/package/sexp-grammar][sexp-grammar]] today, to see if I could use it to
+create an isomorphic transformation from Futhark core language (IR) to sexps,
+which would be very useful for testing stuff like my last use and interference
+analyses. After getting Troels to bump the stack snapshot, I was successfully
+able to add sexp-grammar as a dependency to futhark and start creating
+isomorphisms. Everything started out pretty well. For example, here are the
+isomorphisms for [[https://hackage.haskell.org/package/futhark-0.16.3/docs/Language-Futhark-Core.html#t:Name][Name]] and [[https://hackage.haskell.org/package/futhark-0.16.3/docs/Language-Futhark-Core.html#t:VName][VName]]:
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+instance SexpIso Name where
+  sexpIso = with (\name -> name . symbol)
+
+
+instance SexpIso VName where
+  sexpIso = with $ \vname ->  -- Person is isomorphic to:
+    Sexp.list (                           -- a list with
+      Sexp.el (Sexp.sym "vname") >>>          -- a symbol "person",
+      Sexp.el sexpIso         >>>          -- a string, and
+      Sexp.el Sexp.int)  >>>     -- an optional keyword :age with int value.
+    vname
+#+end_src
+
+I then tried taking on a bigger task: [[https://hackage.haskell.org/package/futhark-0.16.3/docs/Futhark-IR-Syntax-Core.html#t:PrimValue][PrimValue]]. Unfortunately, down the line
+that requires isomorphims for [[https://hackage.haskell.org/package/base-4.14.0.0/docs/Data-Int.html#t:Int8][Int8]] and friends, which don't derive [[https://hackage.haskell.org/package/base-4.14.0.0/docs/GHC-Generics.html#t:Generic][~Generic~]], and
+sexp-grammar doesn't work
+
+Well, turns out it wasn't actually that hard, to fix. I can just use ~iso~ to
+transform to and from an int, which I then read:
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+instance SexpIso IntValue where
+  sexpIso = match
+    $ With (\int8val -> int8val . iso fromIntegral fromIntegral . Sexp.int)
+    $ With (\int16val -> int16val . iso fromIntegral fromIntegral . Sexp.int)
+    $ With (\int32val -> int32val . iso fromIntegral fromIntegral . Sexp.int)
+    $ With (\int64val -> int64val . iso fromIntegral fromIntegral . Sexp.int)
+    $ End
+#+end_src
+
+Then I don't need to specify an isomorphism for ~Int8~.
+
+The next problem came when I tried to use sexp-grammar inside
+~Futhark.IR.Primitive~. Because it is marked as ~Safe~, but ~sexp-grammar~ is
+not, I need to change ~Futhark.IR.Primitive~ to be ~Trustworthy~ instead. I
+don't know if this is the right way to go about things, and ideally
+~sexp-grammar~ would just be safe as well.
