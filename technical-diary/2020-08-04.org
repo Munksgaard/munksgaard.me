@@ -1,0 +1,36 @@
+#+TITLE: 2020-08-04
+#+DATE: <2020-08-04 Tue>
+
+* More sexp-grammar
+
+I managed to continue writing up instances of ~SexpIso~. The results are [[https://github.com/diku-dk/futhark/commit/454000219f3cd2c296e968f8076a68f8ad7ecc12][here]],
+but I think I'll let it rest for a bit now. I should really focus on getting my
+interference graph working.
+
+* Interference
+
+Let's get back into this a little bit.
+
+First off, let's try to remember, and document, what ~analyseStm~ is supposed to
+do. The first thing to remember, is that we're only keeping track of memory
+blocks. We only ever interact with them when they are /created/ or /last used/,
+though they can be last used in multiple places (like two branches of an
+~if~-expression. This means that we can simplify our algorithm quite a bit. We
+only ever need to consider bodies of code where there are statements in, since
+statements are the only places where a memory block can be introduced (through
+the pattern) or last used (through the ~LastUseMap~). For instance, when
+analysing an ~if~-expression, we don't care about the conditional (since it's
+just a ~SubExp~ or the decorations, but only about the two branches.
+
+Now, the result of the big case on the statement expression inside ~analyseStm~
+is supposed to return three things: ~inuse~ is the set of memory blocks that are
+inuse at the end of any code bodies inside the expression. ~lus~ is the set of
+all memory blocks that have reached their last use in any code bodies inside the
+expression. ~graph~ is the interference graph computed for any code -- bodies
+inside the expression. Note that we only really care about nested
+statements. Everything else is handled by ~new_mems~ and ~last_use_mems~ inside
+~analyseStm~.
+
+Okay, so I've actually finished my interference algorithm for now. The next step
+is to do some graph colouring, and actually integrate it with the
+~ReuseAllocations~ pass.
