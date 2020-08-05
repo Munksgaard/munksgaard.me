@@ -1,0 +1,57 @@
+#+TITLE: 2020-08-05
+#+DATE: <2020-08-05 Wed>
+
+* sexp-grammar
+
+Today I learned that the ~cabal.project~ file can be used for detailed control
+of how to handle dependencies. For instance, in my [[https://github.com/Munksgaard/futhark-linear-scan/][futhark-linear-scan]] project,
+I'd like to start experimenting with using the [[https://github.com/diku-dk/futhark/commit/454000219f3cd2c296e968f8076a68f8ad7ecc12][sexp]] branch to do my
+testing. But the changes in that branch are not ready to be included in a
+released version of Futhark yet. Instead, we can specify an override in
+~cabal.project~, like so:
+
+#+begin_src
+source-repository-package
+    type: git
+    location: https://github.com/diku-dk/futhark.git
+    tag: 454000219f3cd2c296e968f8076a68f8ad7ecc12
+#+end_src
+
+This created another problem: [[https://hackage.haskell.org/package/sexp-grammar-2.1.0][sexp-grammar]] relies on [[https://hackage.haskell.org/package/recursion-schemes][recursion-schemes]]
+for... something. I'm not sure. Anyway, since sexp-grammar 2.1.0 was released,
+recursion-schemes has made breaking changes, and the dependency specification in
+sexp-grammar explicitly allows breaking changes in
+recursion-schemes... Sigh... But, thanks to ~cabal.project~, we can just set an
+additional constraint, that recursion-schemes should not use the newer version:
+
+#+begin_src
+constraints: recursion-schemes < 5.2
+#+end_src
+
+And thus, futhark-linear-scan builds!
+
+By the way, futhark-linear-scan is not a very descriptive name any more. In the
+end, we're going to use an interference graph and some graph colouring
+algorithms to do our optimisation. It doesn't really matter though; the module
+inside is called ~ReuseAllocations~, which is what's going to be transferred
+into Futhark.
+
+Now, how far are we with our isomorphisms? As of [[https://github.com/diku-dk/futhark/commit/1d374da18eb6b54f9597a59c899d794d5ec2d19a][1d374da]], we support ~FunDef~
+and ~Prog~. If the goal is to be able to rewrite the ~psum.fut~ test from
+futhark-linear-scan, that would seem to indicate that we're not far
+off. Next up is to make an isomorphism for ~KernelsMem~. Although, perhaps I
+should start with ~SOACs~?
+
+Yes! After quite a bit of fiddling, I got the ~SOACS~ lore to work: [[https://github.com/diku-dk/futhark/commit/e99b92826a7dee90f68f91ccc53294e20a2b70a7][e99b92]].
+
+Now, I can do stuff like this:
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+λ> encode $ (BasicOp $ Rotate [] (VName (nameFromString "mem") 42) :: ExpT SOACS)
+Right "(basicop (rotate () (vname mem 42)))"
+#+end_src
+
+Finally, I also managed to add a ~--sexp~ flag to futhark dev! I had to disable
+some warning/error flags in ~futhark.cabal~ for now, but I can print sexps for
+large functions now! The real test is to see if I can also read sexps back in,
+but that'll have to wait until tomorrow.
