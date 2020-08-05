@@ -34,3 +34,37 @@ statements. Everything else is handled by ~new_mems~ and ~last_use_mems~ inside
 Okay, so I've actually finished my interference algorithm for now. The next step
 is to do some graph colouring, and actually integrate it with the
 ~ReuseAllocations~ pass.
+
+* Back to sexp-grammar
+
+We have a problem: ~Assert~ relies on ~SrcLoc~, which doesn't implement
+~Generic~, and doesn't have an obvious isomorphism. What do? It does implement
+~Monoid~, so if we could just pass it ~mempty~, maybe that would work?
+
+Yes, it seems to work with the following isomorphism for the Apply case:
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+  With (. Sexp.list (Sexp.el (Sexp.sym "assert") >>>
+                     Sexp.el sexpIso >>>
+                     Sexp.el sexpIso >>>
+                     Sexp.el (iso (\_ -> mempty) (T.pack . show) . sexpIso)))
+#+end_src
+
+where the last line takes care of the isomorphism for ~SrcLoc~.
+
+Next problem: Stms.
+
+Oh, that turned out to be easy as well:
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+instance Decorations lore => SexpIso (Stms lore) where
+  sexpIso = iso stmsFromList stmsToList . sexpIso
+#+end_src
+
+Some nasty stuff is happening as soon as we touch ~ExpT~. Because of the type
+system magic in ~Op~, we need to make ~Decorations lore~ require ~SexpIso~ for
+the type families inside. It seems to work though.
+
+Here's the progress so far:
+
+https://github.com/diku-dk/futhark/commit/454000219f3cd2c296e968f8076a68f8ad7ecc12
