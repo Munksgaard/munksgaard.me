@@ -1,0 +1,429 @@
+#+TITLE: 2020-08-06
+#+DATE: <2020-08-06 Thu>
+
+* Reading the S-expression based IR
+
+So, I can now produce sexps for programs like my ~psum.fut~ example. Here's
+~psum.fut~ for reference:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let psum = scan (+) 0
+
+let main (xss: [][]i32) =
+  #[incremental_flattening(only_intra)]
+  map (psum >-> psum >-> psum)
+      xss
+#+end_src
+
+And here is the generated sexps:
+
+#+begin_src lisp
+(prog
+  ()
+  ((fundef
+     (just ((typedirect) (typedirect)))
+     {}
+     main
+     ((memarray
+        int32
+        (ShapeBase ((ext 0) (ext 1)))
+        unique
+        (returnsnewblock
+          defaultspace
+          2
+          (ixfun
+            ((lmad
+               (valueexp (i32 0))
+               ((lmaddim
+                  (leafexp (ext 1) int32)
+                  (valueexp (i32 0))
+                  (leafexp (ext 0) int32)
+                  0
+                  inc)
+                (lmaddim
+                  (valueexp (i32 1))
+                  (valueexp (i32 0))
+                  (leafexp (ext 1) int32)
+                  1
+                  inc))))
+            ((leafexp (ext 0) int32) (leafexp (ext 1) int32))
+            true))))
+     ((param xss_mem_759 (memmem defaultspace))
+      (param impl₀_245 (memprim int32))
+      (param impl₁_246 (memprim int32))
+      (param
+        xss_247
+        (memarray
+          int32
+          (ShapeBase (impl₀_245 impl₁_246))
+          nonunique
+          (arrayin
+            xss_mem_759
+            (ixfun
+              ((lmad
+                 (valueexp (i32 0))
+                 ((lmaddim
+                    (leafexp impl₁_246 int32)
+                    (valueexp (i32 0))
+                    (leafexp impl₀_245 int32)
+                    0
+                    inc)
+                  (lmaddim
+                    (valueexp (i32 1))
+                    (valueexp (i32 0))
+                    (leafexp impl₁_246 int32)
+                    1
+                    inc))))
+              ((leafexp impl₀_245 int32) (leafexp impl₁_246 int32))
+              true)))))
+     (body
+       nil
+       ((stm
+          (patternt () ((patelemt binop_x_774 (memprim int64))))
+          (stmaux
+            ()
+            {(comp incremental_flattening ((atom only_intra)))}
+            nil)
+          (basicop (convop (sext int32 int64) impl₀_245)))
+        (stm
+          (patternt () ((patelemt binop_y_775 (memprim int64))))
+          (stmaux
+            ()
+            {(comp incremental_flattening ((atom only_intra)))}
+            nil)
+          (basicop (convop (sext int32 int64) impl₁_246)))
+        (stm
+          (patternt () ((patelemt binop_x_776 (memprim int64))))
+          (stmaux
+            ()
+            {(comp incremental_flattening ((atom only_intra)))}
+            nil)
+          (basicop
+            (binop (mul int64 undef) binop_x_774 binop_y_775)))
+        (stm
+          (patternt () ((patelemt bytes_773 (memprim int64))))
+          (stmaux
+            ()
+            {(comp incremental_flattening ((atom only_intra)))}
+            nil)
+          (basicop (binop (mul int64 undef) (i64 4) binop_x_776)))
+        (stm
+          (patternt () ((patelemt mem_777 (memmem defaultspace))))
+          (stmaux
+            ()
+            {(comp incremental_flattening ((atom only_intra)))}
+            nil)
+          (op (alloc bytes_773 defaultspace)))
+        (stm
+          (patternt () ((patelemt binop_x_763 (memprim int64))))
+          (stmaux () {} nil)
+          (basicop (subexp binop_y_775)))
+        (stm
+          (patternt () ((patelemt bytes_762 (memprim int64))))
+          (stmaux () {} nil)
+          (basicop (binop (mul int64 undef) (i64 4) binop_y_775)))
+        (stm
+          (patternt () ((patelemt binop_x_767 (memprim int64))))
+          (stmaux () {} nil)
+          (basicop (subexp binop_y_775)))
+        (stm
+          (patternt () ((patelemt bytes_766 (memprim int64))))
+          (stmaux () {} nil)
+          (basicop (subexp bytes_762)))
+        (stm
+          (patternt () ((patelemt binop_x_771 (memprim int64))))
+          (stmaux () {} nil)
+          (basicop (subexp binop_y_775)))
+        (stm
+          (patternt () ((patelemt bytes_770 (memprim int64))))
+          (stmaux () {} nil)
+          (basicop (subexp bytes_762)))
+        (stm
+          (patternt
+            ()
+            ((patelemt
+               res_408
+               (memarray
+                 int32
+                 (ShapeBase (impl₀_245 impl₁_246))
+                 NoUniqueness
+                 (arrayin
+                   mem_777
+                   (ixfun
+                     ((lmad
+                        (valueexp (i32 0))
+                        ((lmaddim
+                           (leafexp impl₁_246 int32)
+                           (valueexp (i32 0))
+                           (leafexp impl₀_245 int32)
+                           0
+                           inc)
+                         (lmaddim
+                           (valueexp (i32 1))
+                           (valueexp (i32 0))
+                           (leafexp impl₁_246 int32)
+                           1
+                           inc))))
+                     ((leafexp impl₀_245 int32) (leafexp impl₁_246 int32))
+                     true))))))
+          (stmaux
+            ()
+            {(comp incremental_flattening ((atom only_intra)))}
+            nil)
+          (op
+            (inner
+              (segop
+                (segmap
+                  (seggroup (count impl₀_245) (count impl₁_246) novirt)
+                  (segspace phys_tid_305 ((gtid_292 impl₀_245)))
+                  ((array int32 (ShapeBase (impl₁_246)) NoUniqueness))
+                  (kernelbody
+                    nil
+                    ((stm
+                       (patternt
+                         ()
+                         ((patelemt mem_764 (memmem (space "local")))))
+                       (stmaux () {} nil)
+                       (op (alloc bytes_762 (space "local"))))
+                     (stm
+                       (patternt
+                         ()
+                         ((patelemt
+                            resarr0_415
+                            (memarray
+                              int32
+                              (ShapeBase (impl₁_246))
+                              NoUniqueness
+                              (arrayin
+                                mem_764
+                                (ixfun
+                                  ((lmad
+                                     (valueexp (i32 0))
+                                     ((lmaddim
+                                        (valueexp (i32 1))
+                                        (valueexp (i32 0))
+                                        (leafexp impl₁_246 int32)
+                                        0
+                                        inc))))
+                                  ((leafexp impl₁_246 int32))
+                                  true))))))
+                       (stmaux () {} nil)
+                       (op
+                         (inner
+                           (segop
+                             (segscan
+                               (segthred
+                                 (count impl₀_245)
+                                 (count impl₁_246)
+                                 novirt)
+                               (segspace phys_tid_296 ((gtid_295 impl₁_246)))
+                               ((segbinop
+                                  noncommutative
+                                  (lambdat
+                                    ((param x_416 (memprim int32))
+                                     (param x_417 (memprim int32)))
+                                    (body
+                                      nil
+                                      ((stm
+                                         (patternt
+                                           ()
+                                           ((patelemt
+                                              res_418
+                                              (memprim int32))))
+                                         (stmaux () {} nil)
+                                         (basicop
+                                           (binop
+                                             (add int32 wrap)
+                                             x_416
+                                             x_417))))
+                                      (res_418))
+                                    (int32))
+                                  ((i32 0))
+                                  (ShapeBase ())))
+                               (int32)
+                               (kernelbody
+                                 nil
+                                 ((stm
+                                    (patternt
+                                      ()
+                                      ((patelemt x_419 (memprim int32))))
+                                    (stmaux () {} nil)
+                                    (basicop
+                                      (index xss_247 (gtid_292 gtid_295)))))
+                                 ((returns maysimplify x_419))))))))
+                     (stm
+                       (patternt
+                         ()
+                         ((patelemt mem_768 (memmem (space "local")))))
+                       (stmaux () {} nil)
+                       (op (alloc bytes_762 (space "local"))))
+                     (stm
+                       (patternt
+                         ()
+                         ((patelemt
+                            resarr0_425
+                            (memarray
+                              int32
+                              (ShapeBase (impl₁_246))
+                              NoUniqueness
+                              (arrayin
+                                mem_768
+                                (ixfun
+                                  ((lmad
+                                     (valueexp (i32 0))
+                                     ((lmaddim
+                                        (valueexp (i32 1))
+                                        (valueexp (i32 0))
+                                        (leafexp impl₁_246 int32)
+                                        0
+                                        inc))))
+                                  ((leafexp impl₁_246 int32))
+                                  true))))))
+                       (stmaux () {} nil)
+                       (op
+                         (inner
+                           (segop
+                             (segscan
+                               (segthred
+                                 (count impl₀_245)
+                                 (count impl₁_246)
+                                 novirt)
+                               (segspace phys_tid_298 ((gtid_297 impl₁_246)))
+                               ((segbinop
+                                  noncommutative
+                                  (lambdat
+                                    ((param x_426 (memprim int32))
+                                     (param x_427 (memprim int32)))
+                                    (body
+                                      nil
+                                      ((stm
+                                         (patternt
+                                           ()
+                                           ((patelemt
+                                              res_428
+                                              (memprim int32))))
+                                         (stmaux () {} nil)
+                                         (basicop
+                                           (binop
+                                             (add int32 wrap)
+                                             x_426
+                                             x_427))))
+                                      (res_428))
+                                    (int32))
+                                  ((i32 0))
+                                  (ShapeBase ())))
+                               (int32)
+                               (kernelbody
+                                 nil
+                                 ((stm
+                                    (patternt
+                                      ()
+                                      ((patelemt x_429 (memprim int32))))
+                                    (stmaux () {} nil)
+                                    (basicop (index resarr0_415 (gtid_297)))))
+                                 ((returns maysimplify x_429))))))))
+                     (stm
+                       (patternt
+                         ()
+                         ((patelemt mem_772 (memmem (space "local")))))
+                       (stmaux () {} nil)
+                       (op (alloc bytes_762 (space "local"))))
+                     (stm
+                       (patternt
+                         ()
+                         ((patelemt
+                            resarr0_434
+                            (memarray
+                              int32
+                              (ShapeBase (impl₁_246))
+                              NoUniqueness
+                              (arrayin
+                                mem_772
+                                (ixfun
+                                  ((lmad
+                                     (valueexp (i32 0))
+                                     ((lmaddim
+                                        (valueexp (i32 1))
+                                        (valueexp (i32 0))
+                                        (leafexp impl₁_246 int32)
+                                        0
+                                        inc))))
+                                  ((leafexp impl₁_246 int32))
+                                  true))))))
+                       (stmaux () {} nil)
+                       (op
+                         (inner
+                           (segop
+                             (segscan
+                               (segthred
+                                 (count impl₀_245)
+                                 (count impl₁_246)
+                                 novirt)
+                               (segspace phys_tid_300 ((gtid_299 impl₁_246)))
+                               ((segbinop
+                                  noncommutative
+                                  (lambdat
+                                    ((param x_435 (memprim int32))
+                                     (param x_436 (memprim int32)))
+                                    (body
+                                      nil
+                                      ((stm
+                                         (patternt
+                                           ()
+                                           ((patelemt
+                                              res_437
+                                              (memprim int32))))
+                                         (stmaux () {} nil)
+                                         (basicop
+                                           (binop
+                                             (add int32 wrap)
+                                             x_435
+                                             x_436))))
+                                      (res_437))
+                                    (int32))
+                                  ((i32 0))
+                                  (ShapeBase ())))
+                               (int32)
+                               (kernelbody
+                                 nil
+                                 ((stm
+                                    (patternt
+                                      ()
+                                      ((patelemt x_438 (memprim int32))))
+                                    (stmaux () {} nil)
+                                    (basicop (index resarr0_425 (gtid_299)))))
+                                 ((returns maysimplify x_438)))))))))
+                    ((returns maysimplify resarr0_434)))))))))
+       (impl₀_245 impl₁_246 mem_777 res_408)))))
+#+end_src
+
+It's.... rather large. The pretty-printer doesn't do a very good job of being
+conscise, and there are multiple opportunities for improvements:
+
+ - ~BasicOp~ doesn't need to be marked as a ~BasicOp~. For instance, instead of
+   ~(basicop (index resarr0_415 (gtid_297)))~, it should suffice to say ~(index
+   resarr0_415 (gtid_297))~.
+ - Variant names can be improved. In many places, I've just called them the
+   lowercase of their variant name. But ~memprim~ and ~memmem~ could reasonably
+   be shortened to ~prim~ and ~mem~, for instance.
+ - Some cases with thin wrappers like ~Count~ are unnecessarily verbose. For
+   instance, ~(count impl₁_246)~ could be simplified to just ~impl₁_246~.
+ - Some names are ugly. ~lambdat~ could be either ~lambda-t~ or ~lambda~. Same
+   for ~patelemt~ and ~patternt~.
+ - ~segthred~ is a typo.
+ - Some symbols are camel-case, like ~ShapeBase~. All names should follow a
+   standardized format.
+ - This is overly verbose: ~(basicop (binop (add int32 wrap) x_416
+   x_417))~. Supposedly, it could be simplified to just ~(add int32 wrap x_416
+   x_417)~ or ~(add x_416 x_417 :type int32 :overflow wrap)~ or something like
+   that.
+
+But the important thing right now is that it works.
+
+Before I fix all those niceties above, I want to make sure I can actually read
+the program back in. I'll need to amend ~futhark dev~ for that, though I'm not
+sure exactly how.
+
+* Futhark dev
+
+As of [[https://github.com/diku-dk/futhark/commit/a4b40bbc844152eb9f2812b775cf6ebea79b4841][a4b40bb]], I can read and write S-expressions using ~futhark dev~!
