@@ -1,0 +1,29 @@
+#+TITLE: 2020-08-10
+#+DATE: <2020-08-10 Mon>
+
+* Sexps
+
+First of all, let's try to fix ~SrcLoc~.
+
+Lots of fixes for prettier sexps later: [[https://github.com/diku-dk/futhark/pull/1078][A pull request]]. Troels is continuing to
+improve my work, and I'm waiting for sexp-grammar [[https://github.com/esmolanka/sexp-grammar/issues/11#issuecomment-671280117][to release a new version]], and
+nixpkgs to [[https://github.com/NixOS/nixpkgs/pull/95067#issuecomment-671314527][merge haskell-updates]]. In the meantime, I should move on with my
+interference. Actually, interference is mostly done for now, although it could
+do with some nicer tests, now that the sexp stuff is in place. Let's wait a bit,
+and instead try to move on to the actual reuse of allocations.
+
+Ah, stop! Some programs are not encoded/decoded correctly!
+
+To find benchmarks that don't transcode correctly, run the following command
+inside futhark-benchmarks.
+
+#+begin_src
+find . -name '*.fut' -fprint /dev/stderr -exec cabal exec futhark -- dev --kernels -a --sexp '{}' \; > /dev/null
+#+end_src
+
+Turns out InterestCalib does not produce isomorph sexps.
+
+The problem is that it has more than one ~VName~ that looks like this:
+~0_12144~. Because we try to parse the 0 as a symbol, it doesn't work.
+
+Let's fix that tomorrow.
