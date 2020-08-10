@@ -1,0 +1,32 @@
+#+TITLE: 2020-08-07
+#+DATE: <2020-08-07 Fri>
+
+* Compiling from ~futhark dev~
+
+In order to really test my sexps, it would be nice to be able to compile the
+result of ~futhark dev~. Let's see if we can add some ~--compile-opencl~ and
+~--compile-c~ options.
+
+[[https://github.com/diku-dk/futhark/commit/9022a251cac2e53bc080ccc72c90cac290f81fe6][That]] turned out to be fairly easy. Before I move on though, it would be nice to
+address some of Troels' comments. Instead of having ~--sexp-in~ and
+~--sexp-out~, let's make reading based on the filename. If it ends with ~.fut~,
+then we assume it's a futhark file, otherwise assume an sexp. Second, instead of
+having ~--compile-opencl~ take an output file name, instead lets just reuse the
+input file name, like ~futhark opencl~ does. [[https://github.com/diku-dk/futhark/commit/9022a251cac2e53bc080ccc72c90cac290f81fe6][Hurrah!]] It works. And [[https://github.com/diku-dk/futhark/commit/2a3050b96416cf16d5d6c517726e79d5d05e97be][here]] is
+~--compile-c~.
+
+Now, it would be nice to figure out how to instrument ~futhark test~ to first
+write the program to an sexp, then read it back in and compile it, and then
+perform the test. Perhaps I can create a small script for the ~--futhark~ flag
+to ~futhark test~?
+
+No, instead I've embedded a [[https://github.com/diku-dk/futhark/commit/b7d4ed852b5f13cd82904574a369c866345881c1][test]] in the ~sexpAction~ to make sure the program
+being converted is being converted correctly.
+
+It fails when running
+
+#+begin_src
+cabal exec futhark -- dev --kernels -a -e --cse --sexp futhark-benchmarks/rodinia/lud/lud.fut
+#+end_src
+
+Probably because of the ~SrcLoc~ in ~Assert~ in ~BasicOp~.
