@@ -1,0 +1,12 @@
+#+TITLE: 2020-08-11
+#+DATE: <2020-08-11 Tue>
+
+* More sexps
+
+I'm still working on making a nicer sexp-based represention of
+Futhark. Yesterday, Troels made a handful of improvements to [[https://github.com/diku-dk/futhark/pull/1078][my PR]], and today
+I've continued the work a bit. Unfortunately, there are still [[https://github.com/esmolanka/sexp-grammar/pull/16][some]] [[https://github.com/esmolanka/sexp-grammar/issues/15][issues]] with
+sexp-grammar that need to be fixed before we can merge anything.
+
+It looks better now! We still need to wait for nix to update their haskell
+packages though. And for some reason, stack needs [[https://github.com/diku-dk/futhark/pull/1078/commits/2b9cdaa49ac5c37baed1f0f7e79137cec38324f6][this]]?
