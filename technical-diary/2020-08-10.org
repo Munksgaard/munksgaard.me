@@ -17,8 +17,8 @@ Ah, stop! Some programs are not encoded/decoded correctly!
 To find benchmarks that don't transcode correctly, run the following command
 inside futhark-benchmarks.
 
-#+begin_src
-find . -name '*.fut' -fprint /dev/stderr -exec cabal exec futhark -- dev --kernels -a --sexp '{}' \; > /dev/null
+#+begin_src sh -n -r -l "# ref:%s"
+  find . -name '*.fut' -fprint /dev/stderr -exec cabal exec futhark -- dev --kernels -a --sexp '{}' \; > /dev/null # ref:sexp-errors
 #+end_src
 
 Turns out InterestCalib does not produce isomorph sexps.
