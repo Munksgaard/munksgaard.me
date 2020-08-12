@@ -1,0 +1,766 @@
+#+TITLE: 2020-08-12
+#+DATE: <2020-08-12 Wed>
+
+* Today
+
+Today, I'll try implementing a graph coloring algorithm for my interference
+graph.
+
+Ugh, there are still problems with the sexps... ~bfast-cloudy.fut~ does not
+produce an isomorph sexp. It looks like some aliasing information is lost?
+
+Here is the diff between the IR before and af sexp-ization:
+
+#+begin_src diff
+[munksgaard@church:~/src/futhark/futhark-benchmarks]$ diff -u bfast-cloudy.ir.orig bfast-cloudy.ir
+--- bfast-cloudy.ir.orig	2020-08-12 09:50:30.728831671 +0200
++++ bfast-cloudy.ir	2020-08-12 09:50:08.308701607 +0200
+@@ -22,7 +22,7 @@
+   let {bool dim_match_912} = eq_i32(N_901, N_903)
+   let {cert empty_or_match_cert_913} =
+     assert(dim_match_912, "function arguments of wrong shape",
+-           "misc/bfast/bfast-cloudy.fut:106:1-235:10")
++           "unknown location")
+   let {i32 x_915} = mul32(2i32, k_905)
+   let {i32 k2p2_916} = add32(2i32, x_915)
+   let {bool cond_917} = slt32(0i32, trend_904)
+@@ -61,7 +61,7 @@
+       let {bool valid_922} = not bounds_invalid_upwards_921
+       let {cert range_valid_c_923} =
+         assert(valid_922, "Range ", 0i32, "..", 1i32, "..<", k2p2'_918,
+-                          " is invalid.", "/prelude/math.fut:461:23-30")
++                          " is invalid.", "unknown location")
+       let {i64 k2p2'_1487} = binop_x_5073
+       let {i64 N_1488} = binop_y_5074
+       let {i64 nest_size_1490} = binop_x_5075
+@@ -131,7 +131,6 @@
+             }
+           return {returns res_1499}
+         }
+-      -- res_945 aliases res_1495
+       -- res_945 : [k2p2'_918][N_901]f32@@mem_5076->
+       -- {base: [k2p2'_918, N_901]; contiguous: True; LMADs: [{offset: 0i32;
+       --                                                       strides: [N_901, 1i32];
+@@ -148,7 +147,7 @@
+       let {bool valid_947} = not bounds_invalid_upwards_946
+       let {cert range_valid_c_948} =
+         assert(valid_947, "Range ", 0i32, "..", 1i32, "..<", k2p2'_918,
+-                          " is invalid.", "/prelude/math.fut:461:23-30")
++                          " is invalid.", "unknown location")
+       let {i64 k2p2'_1683} = binop_x_5073
+       let {i64 N_1684} = binop_y_5074
+       let {i64 nest_size_1686} = binop_x_5075
+@@ -205,7 +204,6 @@
+             }
+           return {returns res_1695}
+         }
+-      -- res_968 aliases res_1691
+       -- res_968 : [k2p2'_918][N_901]f32@@mem_5082->
+       -- {base: [k2p2'_918, N_901]; contiguous: True; LMADs: [{offset: 0i32;
+       --                                                       strides: [N_901, 1i32];
+@@ -218,7 +216,6 @@
+         res_1691
+       in {mem_5082, res_968}
+     }
+-  -- res_969 aliases binop_p_920
+   -- res_969 : [k2p2'_918][N_901]f32@@binop_p_mem_5083->
+   -- {base: [k2p2'_918, N_901]; contiguous: True; LMADs: [{offset: 0i32;
+   --                                                       strides: [N_901, 1i32];
+@@ -235,8 +232,7 @@
+   let {bool zero_975} = eq_i32(y_974, 0i32)
+   let {bool nonzero_976} = not zero_975
+   let {cert nonzero_cert_977} =
+-    assert(nonzero_976, "division by zero",
+-           "misc/bfast/bfast-cloudy.fut:123:21-45")
++    assert(nonzero_976, "division by zero", "unknown location")
+   let {i32 x_978} =
+     <nonzero_cert_977>
+     sdiv32(x_973, y_974)
+@@ -288,7 +284,6 @@
+       let {f32 res_1798} = fadd32(res_981, x_1797)
+       return {returns res_1798}
+     }
+-  -- res_988 aliases res_1796
+   -- res_988 : [N_901][k2p2'_918]f32@@mem_5094->
+   -- {base: [N_901, k2p2'_918]; contiguous: True; LMADs: [{offset: 0i32;
+   --                                                       strides: [k2p2'_918, 1i32];
+@@ -317,13 +312,11 @@
+   let {cert index_certs_1006} =
+     assert(index_ok_1005, "Index [", 0i32, ":, :", n_906,
+                           "] out of bounds for array of shape [", k2p2'_918,
+-                          "][", N_901, "].",
+-           "misc/bfast/bfast-cloudy.fut:127:15-21")
++                          "][", N_901, "].", "unknown location")
+   let {cert index_certs_1008} =
+     assert(index_ok_1005, "Index [:", n_906, ", ", 0i32,
+                           ":] out of bounds for array of shape [", N_901, "][",
+-                          k2p2'_918, "].",
+-           "misc/bfast/bfast-cloudy.fut:128:15-22")
++                          k2p2'_918, "].", "unknown location")
+   let {bool empty_slice_1010} = eq_i32(m_902, 0i32)
+   let {i32 m_1011} = sub32(m_902, 1i32)
+   let {bool zero_leq_i_p_m_t_s_1012} = sle32(0i32, m_1011)
+@@ -336,7 +329,7 @@
+   let {cert index_certs_1019} =
+     assert(index_ok_1018, "Index [", 0i32, ":, :", n_906,
+                           "] out of bounds for array of shape [", m_902, "][",
+-                          N_901, "].", "misc/bfast/bfast-cloudy.fut:129:15-26")
++                          N_901, "].", "unknown location")
+   let {bool suff_outer_par_1801} =
+     get_size(suff_outer_par_6, threshold ()) <= m_902
+   let {i64 m_1827} = sext i32 m_902 to i64
+@@ -482,7 +475,6 @@
+           --                                                           permutation: [0, 1];
+           --                                                           monotonicity: [Inc, Inc]}]}
+           let {[k2p2'_918][k2p2'_918]f32 res_1834} =
+-            -- Consumes result_5014
+             -- mapout_5015 : *[k2p2'_918][k2p2'_918]f32@@mem_5105->
+             -- {base: [k2p2'_918, k2p2'_918]; contiguous: True; LMADs: [{offset: 0i32;
+             --                                                           strides: [k2p2'_918, 1i32];
+@@ -500,7 +492,6 @@
+               --                                                           permutation: [0, 1];
+               --                                                           monotonicity: [Inc, Inc]}]}
+               let {[k2p2'_918][k2p2'_918]f32 lw_dest_5017} =
+-                -- Consumes mapout_5015
+                 -- lowered_array_5064 : *[k2p2'_918][k2p2'_918]f32@@mem_5105->
+                 -- {base: [k2p2'_918, k2p2'_918]; contiguous: True; LMADs: [{offset: 0i32;
+                 --                                                           strides: [k2p2'_918, 1i32];
+@@ -541,7 +532,6 @@
+                   --                                                           permutation: [0, 1];
+                   --                                                           monotonicity: [Inc, Inc]}]}
+                   let {[k2p2'_918][k2p2'_918]f32 lowered_array_updated_5068} =
+-                    -- Consumes lowered_array_5064
+                     lowered_array_5064 with [i_5016, i_5020] <- res_1838
+                   in {lowered_array_updated_5068}
+                 }
+@@ -610,7 +600,6 @@
+               --                                                permutation: [0];
+               --                                                monotonicity: [Inc]}]}
+               let {[k2p2'_918]f32 res_2042} =
+-                -- Consumes result_5024
+                 -- mapout_5025 : *[k2p2'_918]f32@@mem_5156->
+                 -- {base: [k2p2'_918]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+                 --                                                rotates: [0i32];
+@@ -649,7 +638,6 @@
+                   --                                                permutation: [0];
+                   --                                                monotonicity: [Inc]}]}
+                   let {[k2p2'_918]f32 lw_dest_5027} =
+-                    -- Consumes mapout_5025
+                     mapout_5025 with [i_5026] <- res_2044
+                   in {lw_dest_5027}
+                 }
+@@ -788,7 +776,6 @@
+         }
+       in {res_mem_5206, res_2038}
+     }
+-  -- res_1039 aliases res_1022
+   -- res_1039 : [m_902][k2p2'_918][k2p2'_918]f32@@res_mem_5215->
+   -- {base: [m_902, k2p2'_918, k2p2'_918]; contiguous: True; LMADs: [{offset: 0i32;
+   --                                                                  strides: [mul_nw32 (k2p2'_918) (k2p2'_918), k2p2'_918, 1i32];
+@@ -803,18 +790,16 @@
+   let {bool valid_1043} = not bounds_invalid_upwards_1042
+   let {cert range_valid_c_1044} =
+     assert(valid_1043, "Range ", 0i32, "..", 1i32, "..<", nm_1041,
+-                       " is invalid.", "/prelude/math.fut:461:23-30")
++                       " is invalid.", "unknown location")
+   let {bool zero_1046} = eq_i32(m_1040, 0i32)
+   let {bool nonzero_1047} = not zero_1046
+   let {cert nonzero_cert_1048} =
+-    assert(nonzero_1047, "division by zero",
+-           "misc/bfast/bfast-cloudy.fut:74:41-47")
++    assert(nonzero_1047, "division by zero", "unknown location")
+   let {bool loop_nonempty_1049} = slt32(0i32, k2p2'_918)
+   let {bool loop_not_taken_1050} = not loop_nonempty_1049
+   let {bool protect_assert_disj_1051} = logor(nonzero_1047, loop_not_taken_1050)
+   let {cert nonzero_cert_1052} =
+-    assert(protect_assert_disj_1051, "division by zero",
+-           "misc/bfast/bfast-cloudy.fut:61:43-49")
++    assert(protect_assert_disj_1051, "division by zero", "unknown location")
+   let {i32 j_m_i_1053} = sub32(m_1040, k2p2'_918)
+   let {bool empty_slice_1054} = eq_i32(j_m_i_1053, 0i32)
+   let {i32 m_1055} = sub32(j_m_i_1053, 1i32)
+@@ -831,14 +816,13 @@
+   let {cert index_certs_1066} =
+     assert(index_ok_1065, "Index [", 0i32, ":", k2p2'_918, ", ", k2p2'_918, ":",
+                           m_1040, "] out of bounds for array of shape [",
+-                          k2p2'_918, "][", m_1040, "].",
+-           "misc/bfast/bfast-cloudy.fut:82:8-37")
++                          k2p2'_918, "][", m_1040, "].", "unknown location")
+   let {bool dim_match_1067} = eq_i32(k2p2'_918, j_m_i_1053)
+   let {cert empty_or_match_cert_1068} =
+     assert(dim_match_1067, "Value of (core language) shape (", k2p2'_918, ", ",
+                            j_m_i_1053, ") cannot match shape of type `[",
+                            k2p2'_918, "][", k2p2'_918, "]f32`.",
+-           "misc/bfast/bfast-cloudy.fut:82:8-50")
++           "unknown location")
+   let {i32 max_group_size_2261} =
+     get_size_max(group_size)
+   let {bool fits_2262} = sle32(nm_1041, max_group_size_2261)
+@@ -997,7 +981,6 @@
+           --                                              permutation: [0];
+           --                                              monotonicity: [Inc]}]}
+           let {[nm_1041]f32 res_2276} =
+-            -- Consumes res_2266
+             -- A_2278 : *[nm_1041]f32@@mem_5220->
+             -- {base: [nm_1041]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+             --                                              rotates: [0i32]; shape: [nm_1041];
+@@ -1009,7 +992,7 @@
+               let {cert index_certs_2280} =
+                 assert(y_2279, "Index [", i_2277,
+                                "] out of bounds for array of shape [", nm_1041,
+-                               "].", "misc/bfast/bfast-cloudy.fut:60:16-19")
++                               "].", "unknown location")
+               let {f32 v1_2281} =
+                 <index_certs_2280>
+                 A_2278[i_2277]
+@@ -1066,7 +1049,6 @@
+               --                                              permutation: [0];
+               --                                              monotonicity: [Inc]}]}
+               let {[nm_1041]f32 res_2304} =
+-                -- Consumes A_2278
+                 <range_valid_c_1044>
+                 segmap_thread
+                 (#groups=m_902; groupsize=nm_1041)
+@@ -1076,7 +1058,6 @@
+                 }
+               in {res_2304}
+             }
+-          -- res_2307 aliases res_2276
+           -- res_2307 : [k2p2'_918][m_1040]f32@@mem_5220->
+           -- {base: [k2p2'_918, m_1040]; contiguous: True; LMADs: [{offset: 0i32;
+           --                                                        strides: [m_1040, 1i32];
+@@ -1086,7 +1067,6 @@
+           --                                                        monotonicity: [Inc, Inc]}]}
+           let {[k2p2'_918][m_1040]f32 res_2307} = reshape((k2p2'_918, m_1040),
+                                                           res_2276)
+-          -- res_2308 aliases res_2307
+           -- res_2308 : [k2p2'_918][j_m_i_1053]f32@@mem_5220->
+           -- {base: [k2p2'_918, m_1040]; contiguous: False; LMADs: [{offset: k2p2'_918;
+           --                                                         strides: [m_1040, 1i32];
+@@ -1097,7 +1077,6 @@
+           let {[k2p2'_918][j_m_i_1053]f32 res_2308} =
+             <index_certs_1066>
+             res_2307[0i32:+k2p2'_918*1i32, k2p2'_918:+j_m_i_1053*1i32]
+-          -- res_2309 aliases res_2308
+           -- res_2309 : [k2p2'_918][k2p2'_918]f32@@mem_5220->
+           -- {base: [k2p2'_918, k2p2'_918]; contiguous: False; LMADs: [{offset: k2p2'_918;
+           --                                                            strides: [m_1040, 1i32];
+@@ -1153,7 +1132,6 @@
+             }
+           return {returns res_2765}
+         }
+-      -- res_r_mem_5302 aliases mem_5250
+       -- res_r_2771 : [m_902][nm_1041]f32@@res_r_mem_5302->
+       -- {base: [res_r_ixfn_5295, res_r_ixfn_5296]; contiguous: True;
+       --  LMADs: [{offset: res_r_ixfn_5297; strides: [res_r_ixfn_5298, res_r_ixfn_5300];
+@@ -1163,7 +1141,6 @@
+            i32 res_r_ixfn_5298, i32 res_r_ixfn_5299, i32 res_r_ixfn_5300,
+            i32 res_r_ixfn_5301, mem res_r_mem_5302;
+            [m_902][nm_1041]f32 res_r_2771} =
+-        -- Consumes res_r_2759
+         -- A_expanded_2773 : *[m_902][nm_1041]f32@@mem_param_5258->
+         -- {base: [ctx_param_ext_5251, ctx_param_ext_5252]; contiguous: True;
+         --  LMADs: [{offset: ctx_param_ext_5253;
+@@ -1184,7 +1161,7 @@
+           let {cert index_certs_2775} =
+             assert(y_2774, "Index [", i_2772,
+                            "] out of bounds for array of shape [", nm_1041,
+-                           "].", "misc/bfast/bfast-cloudy.fut:60:16-19")
++                           "].", "unknown location")
+           let {i32 res_ixfn_5287} =
+             -- Branch returns: {i32}
+             if <equiv> intra_suff_and_fits_2784
+@@ -1213,7 +1190,6 @@
+             -- Branch returns: {i32}
+             if <equiv> intra_suff_and_fits_2784
+             then {0i32} else {ctx_param_ext_5253}
+-          -- res_mem_5294 aliases mem_param_5258
+           -- res_2785 : [m_902][nm_1041]f32@@res_mem_5294->
+           -- {base: [res_ixfn_5289, res_ixfn_5290]; contiguous: True;
+           --  LMADs: [{offset: res_ixfn_5293; strides: [res_ixfn_5291, res_ixfn_5292];
+@@ -1221,7 +1197,6 @@
+           --           permutation: [0, 1]; monotonicity: [Inc, Inc]}]}
+           let {mem res_mem_5294;
+                [m_902][nm_1041]f32 res_2785} =
+-            -- Consumes A_expanded_2773
+             -- Branch returns: {[m_902][nm_1041]f32@?0->
+             --                  {base: [res_ixfn_5289, res_ixfn_5290]; contiguous: True;
+             --                   LMADs: [{offset: res_ixfn_5293;
+@@ -1253,11 +1228,9 @@
+               --                                                     permutation: [0, 1];
+               --                                                     monotonicity: [Inc, Inc]}]}
+               let {[m_902][nm_1041]f32 res_2786} =
+-                -- Consumes A_expanded_coalesced_4402
+                 segmap_group
+                 (#groups=m_902; groupsize=nm_1041)
+                 (gtid_2337 < m_902) (~phys_tid_2364) : {[nm_1041]f32} {
+-                  -- A_2787 aliases A_expanded_coalesced_4402
+                   -- A_2787 : [nm_1041]f32@@mem_5265->
+                   -- {base: [nm_1041, m_902]; contiguous: False; LMADs: [{offset: gtid_2337;
+                   --                                                      strides: [m_902];
+@@ -1331,7 +1304,6 @@
+                   --                                                      permutation: [0];
+                   --                                                      monotonicity: [Inc]}]}
+                   let {[nm_1041]f32 res_2811} =
+-                    -- Consumes A_2787
+                     <range_valid_c_1044>
+                     segmap_thread
+                     (#groups=m_902; groupsize=nm_1041)
+@@ -1423,7 +1395,6 @@
+               --           shape: [ctx_param_ext_5255, ctx_param_ext_5257]; permutation: [0, 1];
+               --           monotonicity: [Inc, Inc]}]}
+               let {[m_902][nm_1041]f32 res_2877} =
+-                -- Consumes A_expanded_2773
+                 <range_valid_c_1044>
+                 segmap_thread
+                 (#groups=segmap_usable_groups_2876; groupsize=segmap_group_size_2873)
+@@ -1470,7 +1441,6 @@
+             res_r_2771[new_index_4373, new_index_4386]
+           return {returns v_2897}
+         }
+-      -- res_2898 aliases res_r_2894
+       -- res_2898 : [m_902][k2p2'_918][k2p2'_918]f32@@mem_5310->
+       -- {base: [m_902, k2p2'_918, k2p2'_918]; contiguous: True; LMADs: [{offset: 0i32;
+       --                                                                  strides: [mul_nw32 (k2p2'_918) (k2p2'_918), k2p2'_918, 1i32];
+@@ -1483,7 +1453,6 @@
+         reshape((m_902, k2p2'_918, k2p2'_918), res_r_2894)
+       in {mem_5310, res_2898}
+     }
+-  -- res_1115 aliases res_1069
+   -- res_1115 : [m_902][k2p2'_918][k2p2'_918]f32@@res_mem_5311->
+   -- {base: [m_902, k2p2'_918, k2p2'_918]; contiguous: True; LMADs: [{offset: 0i32;
+   --                                                                  strides: [mul_nw32 (k2p2'_918) (k2p2'_918), k2p2'_918, 1i32];
+@@ -1619,7 +1588,6 @@
+           --                                                permutation: [0];
+           --                                                monotonicity: [Inc]}]}
+           let {[k2p2'_918]f32 res_2930} =
+-            -- Consumes result_5032
+             -- mapout_5033 : *[k2p2'_918]f32@@mem_5320->
+             -- {base: [k2p2'_918]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+             --                                                rotates: [0i32];
+@@ -1656,7 +1624,6 @@
+               --                                                permutation: [0];
+               --                                                monotonicity: [Inc]}]}
+               let {[k2p2'_918]f32 lw_dest_5035} =
+-                -- Consumes mapout_5033
+                 mapout_5033 with [i_5034] <- res_2932
+               in {lw_dest_5035}
+             }
+@@ -1738,7 +1705,6 @@
+               --           monotonicity: [Unknown, Unknown]}]}
+               let {mem@f32 accs_mem_5383;
+                    [tile_size_4443][tile_size_4443]f32 accs_4575} =
+-                -- Consumes mergeinit_4474
+                 -- x_merge_4475 : *[tile_size_4443][tile_size_4443]f32@@mem_param_5352->
+                 -- {base: [tile_size_4443, tile_size_4443]; contiguous: True;
+                 --  LMADs: [{offset: 0i32; strides: [0i32, 0i32]; rotates: [0i32, 0i32];
+@@ -2010,7 +1976,6 @@
+         }
+       in {res_mem_5420, res_3025}
+     }
+-  -- res_1129 aliases res_1116
+   -- res_1129 : [m_902][k2p2'_918]f32@@res_mem_5427->
+   -- {base: [m_902, k2p2'_918]; contiguous: True; LMADs: [{offset: 0i32;
+   --                                                       strides: [k2p2'_918, 1i32];
+@@ -2140,7 +2105,6 @@
+           --                                                permutation: [0];
+           --                                                monotonicity: [Inc]}]}
+           let {[k2p2'_918]f32 res_3090} =
+-            -- Consumes result_5042
+             -- mapout_5043 : *[k2p2'_918]f32@@mem_5443->
+             -- {base: [k2p2'_918]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+             --                                                rotates: [0i32];
+@@ -2166,7 +2130,6 @@
+               --                                                permutation: [0];
+               --                                                monotonicity: [Inc]}]}
+               let {[k2p2'_918]f32 lw_dest_5045} =
+-                -- Consumes mapout_5043
+                 mapout_5043 with [i_5044] <- res_3092
+               in {lw_dest_5045}
+             }
+@@ -2271,7 +2234,6 @@
+         }
+       in {res_mem_5480, res_3179}
+     }
+-  -- res_1142 aliases res_1130
+   -- res_1142 : [m_902][k2p2'_918]f32@@res_mem_5487->
+   -- {base: [m_902, k2p2'_918]; contiguous: True; LMADs: [{offset: 0i32;
+   --                                                       strides: [k2p2'_918, 1i32];
+@@ -2413,7 +2375,6 @@
+           --                                            permutation: [0];
+           --                                            monotonicity: [Inc]}]}
+           let {[N_901]f32 res_3239} =
+-            -- Consumes result_5050
+             -- mapout_5051 : *[N_901]f32@@mem_5496->
+             -- {base: [N_901]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+             --                                            rotates: [0i32]; shape: [N_901];
+@@ -2436,7 +2397,6 @@
+               --                                            permutation: [0];
+               --                                            monotonicity: [Inc]}]}
+               let {[N_901]f32 lw_dest_5053} =
+-                -- Consumes mapout_5051
+                 mapout_5051 with [i_5052] <- res_3241
+               in {lw_dest_5053}
+             }
+@@ -2531,7 +2491,6 @@
+               --           monotonicity: [Unknown, Unknown]}]}
+               let {mem@f32 accs_mem_5564;
+                    [tile_size_4735][tile_size_4735]f32 accs_4863} =
+-                -- Consumes mergeinit_4766
+                 -- x_merge_4767 : *[tile_size_4735][tile_size_4735]f32@@mem_param_5533->
+                 -- {base: [tile_size_4735, tile_size_4735]; contiguous: True;
+                 --  LMADs: [{offset: 0i32; strides: [0i32, 0i32]; rotates: [0i32, 0i32];
+@@ -2769,7 +2728,6 @@
+         }
+       in {res_mem_5601, res_3326}
+     }
+-  -- res_1154 aliases res_1143
+   -- res_1154 : [m_902][N_901]f32@@res_mem_5608->
+   -- {base: [m_902, N_901]; contiguous: True; LMADs: [{offset: 0i32;
+   --                                                   strides: [N_901, 1i32];
+@@ -2785,7 +2743,7 @@
+   let {cert index_certs_1159} =
+     assert(bounds_check_1158, "Index [", i_1155,
+                               "] out of bounds for array of shape [", N_901,
+-                              "].", "/prelude/array.fut:18:29-34")
++                              "].", "unknown location")
+   let {bool fits_3436} = sle32(N_901, max_group_size_2261)
+   let {bool suff_intra_par_3434} =
+     get_size(suff_intra_par_22, threshold (!suff_outer_par_21)) <= N_901
+@@ -2834,7 +2792,6 @@
+   let {i64 bytes_5640} = bytes_5602
+   let {i64 binop_x_5646} = m_1827
+   let {i64 bytes_5645} = bytes_5626
+-  -- res_mem_5650 aliases mem_5613
+   -- res_1160 : [m_902]i32@@res_mem_5649->
+   -- {base: [m_902]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+   --                                            rotates: [0i32]; shape: [m_902];
+@@ -2849,7 +2806,6 @@
+   --                                                   monotonicity: [Inc, Inc]}]}
+   let {mem res_mem_5649, mem res_mem_5650;
+        [m_902]i32 res_1160, [m_902][N_901]f32 res_1161} =
+-    -- Consumes res_r_3618
+     -- Branch returns: {[m_902]i32@?0->
+     --                  {base: [m_902]; contiguous: True; LMADs: [{offset: 0i32;
+     --                                                             strides: [1i32];
+@@ -2946,7 +2902,6 @@
+           --                                            permutation: [0];
+           --                                            monotonicity: [Inc]}]}
+           let {[N_901]f32 res_3458} =
+-            -- Consumes res_3457
+             segmap_thread
+             (#groups=m_902; groupsize=N_901)
+             (write_i_3364 < N_901) (~phys_tid_3365) : {f32} {
+@@ -3015,7 +2970,6 @@
+           let {i32 res_3589} = btoi bool res_3588 to i32
+           return {returns res_3589, returns res_3585}
+         }
+-      -- res_precopy_4363 aliases res_r_3574
+       -- res_precopy_4363 : [m_902]i32@@mem_5639->
+       -- {base: [m_902, N_901]; contiguous: False; LMADs: [{offset: i_1155;
+       --                                                    strides: [N_901];
+@@ -3044,7 +2998,6 @@
+       --                                                   permutation: [0, 1];
+       --                                                   monotonicity: [Inc, Inc]}]}
+       let {[m_902][N_901]f32 res_3629} =
+-        -- Consumes res_r_3618
+         segmap_thread
+         (#groups=segmap_usable_groups_3628; groupsize=segmap_group_size_3625)
+         (gtid_3468 < m_902, gtid_3469 < N_901) (~phys_tid_3470) : {f32} {
+@@ -3065,14 +3018,12 @@
+         }
+       in {mem_5647, mem_5613, res_3596, res_3629}
+     }
+-  -- res_1196 aliases res_1160
+   -- res_1196 : [m_902]i32@@res_mem_5649->
+   -- {base: [m_902]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+   --                                            rotates: [0i32]; shape: [m_902];
+   --                                            permutation: [0];
+   --                                            monotonicity: [Inc]}]}
+   let {[m_902]i32 res_1196} = opaque(res_1160)
+-  -- res_1197 aliases res_1161
+   -- res_1197 : [m_902][N_901]f32@@res_mem_5650->
+   -- {base: [m_902, N_901]; contiguous: True; LMADs: [{offset: 0i32;
+   --                                                   strides: [N_901, 1i32];
+@@ -3469,21 +3420,18 @@
+       in {res_mem_5698, res_mem_5699, res_mem_5700, res_3867, res_3868,
+           res_3869}
+     }
+-  -- res_1229 aliases res_1200
+   -- res_1229 : [m_902]i32@@res_mem_5701->
+   -- {base: [m_902]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+   --                                            rotates: [0i32]; shape: [m_902];
+   --                                            permutation: [0];
+   --                                            monotonicity: [Inc]}]}
+   let {[m_902]i32 res_1229} = opaque(res_1200)
+-  -- res_1230 aliases res_1201
+   -- res_1230 : [m_902]i32@@res_mem_5702->
+   -- {base: [m_902]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+   --                                            rotates: [0i32]; shape: [m_902];
+   --                                            permutation: [0];
+   --                                            monotonicity: [Inc]}]}
+   let {[m_902]i32 res_1230} = opaque(res_1201)
+-  -- res_1231 aliases res_1202
+   -- res_1231 : [m_902]f32@@res_mem_5703->
+   -- {base: [m_902]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+   --                                            rotates: [0i32]; shape: [m_902];
+@@ -3617,7 +3565,6 @@
+         }
+       in {mem_5714, res_3962}
+     }
+-  -- res_1253 aliases res_1238
+   -- res_1253 : [m_902]f32@@res_mem_5715->
+   -- {base: [m_902]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+   --                                            rotates: [0i32]; shape: [m_902];
+@@ -3629,7 +3576,7 @@
+   let {bool valid_1256} = not bounds_invalid_upwards_1255
+   let {cert range_valid_c_1257} =
+     assert(valid_1256, "Range ", 0i32, "..", 1i32, "..<", Nmn_1254,
+-                       " is invalid.", "/prelude/math.fut:461:23-30")
++                       " is invalid.", "unknown location")
+   let {bool fits_4102} = sle32(Nmn_1254, max_group_size_2261)
+   let {bool suff_intra_par_4100} =
+     get_size(suff_intra_par_28, threshold (!suff_outer_par_27)) <= Nmn_1254
+@@ -3875,7 +3822,6 @@
+       let {[m_902]f32 res_4354} = copy(acc0_r_4334)
+       in {mem_5744, res_4354}
+     }
+-  -- entry_result_1308 aliases res_1259
+   -- entry_result_1308 : [m_902]f32@@res_mem_5745->
+   -- {base: [m_902]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+   --                                            rotates: [0i32]; shape: [m_902];
+
+#+end_src
+
+All the ~"unknown location"~ bits are fine. I think the real problem is the
+aliasing information that has disappeared. However, shouldn't that also be the
+case for other programs?
+
+Let's try to figure that out by investigating lud.fut. By running ~futhark dev
+--kernels -a -e --cse~ on lud.fut, we see that there's also aliasing information
+in there. If my theory is correct that sexpization removes aliasing information,
+reading the sexpized lud.fut back in should result in a program without
+aliasing. And the action should complain that sexpization is not isomorph.
+
+Nope, the aliasing information is still there. Wait, it doesn't seem like
+there's any aliasing information at all? Is it only added when printing out the
+IR? When manually adding aliasing information to the IR before sexpizing, the
+aliasing information is correctly transcribed. So that's not it.
+
+Ah, but there are also some "consumes" annotations. Perhaps they're lost too?
+
+Ah, when using the ~printAction~ the lore is aliased before printing. Let's do
+the same in ~sexpAction~ when printing the failing program.
+
+Here's the updated diff after that change:
+
+#+begin_src diff
+--- bfast-cloudy.ir.orig	2020-08-12 10:34:29.516217243 +0200
++++ bfast-cloudy.ir	2020-08-12 10:34:20.797182161 +0200
+@@ -1,3 +1,6 @@
++Internal compiler error (unhandled IO exception).
++Please report this at https://github.com/diku-dk/futhark/issues
++S-exp not isomorph!
+
+
+ -- mappingindices_910 : [N_901]i32@@mappingindices_mem_5069->
+@@ -24,7 +27,7 @@
+   let {bool dim_match_912} = eq_i32(N_901, N_903)
+   let {cert empty_or_match_cert_913} =
+     assert(dim_match_912, "function arguments of wrong shape",
+-           "misc/bfast/bfast-cloudy.fut:106:1-235:10")
++           "unknown location")
+   let {i32 x_915} = mul32(2i32, k_905)
+   let {i32 k2p2_916} = add32(2i32, x_915)
+   let {bool cond_917} = slt32(0i32, trend_904)
+@@ -63,7 +66,7 @@
+       let {bool valid_922} = not bounds_invalid_upwards_921
+       let {cert range_valid_c_923} =
+         assert(valid_922, "Range ", 0i32, "..", 1i32, "..<", k2p2'_918,
+-                          " is invalid.", "/prelude/math.fut:461:23-30")
++                          " is invalid.", "unknown location")
+       let {i64 k2p2'_1487} = binop_x_5073
+       let {i64 N_1488} = binop_y_5074
+       let {i64 nest_size_1490} = binop_x_5075
+@@ -150,7 +153,7 @@
+       let {bool valid_947} = not bounds_invalid_upwards_946
+       let {cert range_valid_c_948} =
+         assert(valid_947, "Range ", 0i32, "..", 1i32, "..<", k2p2'_918,
+-                          " is invalid.", "/prelude/math.fut:461:23-30")
++                          " is invalid.", "unknown location")
+       let {i64 k2p2'_1683} = binop_x_5073
+       let {i64 N_1684} = binop_y_5074
+       let {i64 nest_size_1686} = binop_x_5075
+@@ -237,8 +240,7 @@
+   let {bool zero_975} = eq_i32(y_974, 0i32)
+   let {bool nonzero_976} = not zero_975
+   let {cert nonzero_cert_977} =
+-    assert(nonzero_976, "division by zero",
+-           "misc/bfast/bfast-cloudy.fut:123:21-45")
++    assert(nonzero_976, "division by zero", "unknown location")
+   let {i32 x_978} =
+     <nonzero_cert_977>
+     sdiv32(x_973, y_974)
+@@ -319,13 +321,11 @@
+   let {cert index_certs_1006} =
+     assert(index_ok_1005, "Index [", 0i32, ":, :", n_906,
+                           "] out of bounds for array of shape [", k2p2'_918,
+-                          "][", N_901, "].",
+-           "misc/bfast/bfast-cloudy.fut:127:15-21")
++                          "][", N_901, "].", "unknown location")
+   let {cert index_certs_1008} =
+     assert(index_ok_1005, "Index [:", n_906, ", ", 0i32,
+                           ":] out of bounds for array of shape [", N_901, "][",
+-                          k2p2'_918, "].",
+-           "misc/bfast/bfast-cloudy.fut:128:15-22")
++                          k2p2'_918, "].", "unknown location")
+   let {bool empty_slice_1010} = eq_i32(m_902, 0i32)
+   let {i32 m_1011} = sub32(m_902, 1i32)
+   let {bool zero_leq_i_p_m_t_s_1012} = sle32(0i32, m_1011)
+@@ -338,7 +338,7 @@
+   let {cert index_certs_1019} =
+     assert(index_ok_1018, "Index [", 0i32, ":, :", n_906,
+                           "] out of bounds for array of shape [", m_902, "][",
+-                          N_901, "].", "misc/bfast/bfast-cloudy.fut:129:15-26")
++                          N_901, "].", "unknown location")
+   let {bool suff_outer_par_1801} =
+     get_size(suff_outer_par_6, threshold ()) <= m_902
+   let {i64 m_1827} = sext i32 m_902 to i64
+@@ -805,18 +805,16 @@
+   let {bool valid_1043} = not bounds_invalid_upwards_1042
+   let {cert range_valid_c_1044} =
+     assert(valid_1043, "Range ", 0i32, "..", 1i32, "..<", nm_1041,
+-                       " is invalid.", "/prelude/math.fut:461:23-30")
++                       " is invalid.", "unknown location")
+   let {bool zero_1046} = eq_i32(m_1040, 0i32)
+   let {bool nonzero_1047} = not zero_1046
+   let {cert nonzero_cert_1048} =
+-    assert(nonzero_1047, "division by zero",
+-           "misc/bfast/bfast-cloudy.fut:74:41-47")
++    assert(nonzero_1047, "division by zero", "unknown location")
+   let {bool loop_nonempty_1049} = slt32(0i32, k2p2'_918)
+   let {bool loop_not_taken_1050} = not loop_nonempty_1049
+   let {bool protect_assert_disj_1051} = logor(nonzero_1047, loop_not_taken_1050)
+   let {cert nonzero_cert_1052} =
+-    assert(protect_assert_disj_1051, "division by zero",
+-           "misc/bfast/bfast-cloudy.fut:61:43-49")
++    assert(protect_assert_disj_1051, "division by zero", "unknown location")
+   let {i32 j_m_i_1053} = sub32(m_1040, k2p2'_918)
+   let {bool empty_slice_1054} = eq_i32(j_m_i_1053, 0i32)
+   let {i32 m_1055} = sub32(j_m_i_1053, 1i32)
+@@ -833,14 +831,13 @@
+   let {cert index_certs_1066} =
+     assert(index_ok_1065, "Index [", 0i32, ":", k2p2'_918, ", ", k2p2'_918, ":",
+                           m_1040, "] out of bounds for array of shape [",
+-                          k2p2'_918, "][", m_1040, "].",
+-           "misc/bfast/bfast-cloudy.fut:82:8-37")
++                          k2p2'_918, "][", m_1040, "].", "unknown location")
+   let {bool dim_match_1067} = eq_i32(k2p2'_918, j_m_i_1053)
+   let {cert empty_or_match_cert_1068} =
+     assert(dim_match_1067, "Value of (core language) shape (", k2p2'_918, ", ",
+                            j_m_i_1053, ") cannot match shape of type `[",
+                            k2p2'_918, "][", k2p2'_918, "]f32`.",
+-           "misc/bfast/bfast-cloudy.fut:82:8-50")
++           "unknown location")
+   let {i32 max_group_size_2261} =
+     get_size_max(group_size)
+   let {bool fits_2262} = sle32(nm_1041, max_group_size_2261)
+@@ -1011,7 +1008,7 @@
+               let {cert index_certs_2280} =
+                 assert(y_2279, "Index [", i_2277,
+                                "] out of bounds for array of shape [", nm_1041,
+-                               "].", "misc/bfast/bfast-cloudy.fut:60:16-19")
++                               "].", "unknown location")
+               let {f32 v1_2281} =
+                 <index_certs_2280>
+                 A_2278[i_2277]
+@@ -1186,7 +1183,7 @@
+           let {cert index_certs_2775} =
+             assert(y_2774, "Index [", i_2772,
+                            "] out of bounds for array of shape [", nm_1041,
+-                           "].", "misc/bfast/bfast-cloudy.fut:60:16-19")
++                           "].", "unknown location")
+           let {i32 res_ixfn_5287} =
+             -- Branch returns: {i32}
+             if <equiv> intra_suff_and_fits_2784
+@@ -2787,7 +2784,7 @@
+   let {cert index_certs_1159} =
+     assert(bounds_check_1158, "Index [", i_1155,
+                               "] out of bounds for array of shape [", N_901,
+-                              "].", "/prelude/array.fut:18:29-34")
++                              "].", "unknown location")
+   let {bool fits_3436} = sle32(N_901, max_group_size_2261)
+   let {bool suff_intra_par_3434} =
+     get_size(suff_intra_par_22, threshold (!suff_outer_par_21)) <= N_901
+@@ -3631,7 +3628,7 @@
+   let {bool valid_1256} = not bounds_invalid_upwards_1255
+   let {cert range_valid_c_1257} =
+     assert(valid_1256, "Range ", 0i32, "..", 1i32, "..<", Nmn_1254,
+-                       " is invalid.", "/prelude/math.fut:461:23-30")
++                       " is invalid.", "unknown location")
+   let {bool fits_4102} = sle32(Nmn_1254, max_group_size_2261)
+   let {bool suff_intra_par_4100} =
+     get_size(suff_intra_par_28, threshold (!suff_outer_par_27)) <= Nmn_1254
+@@ -3888,3 +3885,5 @@
+     res_1259
+   in {m_902, res_mem_5745, entry_result_1308}
+ }
++CallStack (from HasCallStack):
++  error, called at src/Futhark/Actions.hs:85:13 in futhark-0.17.0-inplace:Futhark.Actions
+#+end_src
+
+I mean, that all looks okay? When inspecting generating IRs in the same manner
+for LUD, I get the same ~"unknown location"~ diffs, and no isomorphism errors.
+
+Okay, it seems like the error happens after inlining functions. Minimal command
+to reproduce:
+
+#+begin_src
+cabal exec futhark -- dev --verbose -e --inline-functions --sexp misc/bfast/bfast-cloudy.fut > /dev/null
+#+end_src
+
+However, it still seems like the pretty-printed IR only differs by the
+~SrcLoc~. Instead of pretty-printing, let's try showing it.
+
+Huh, it's still the same...
+
+Okay, by showing ~prog == prog~ as part of the error output in ~sexpAction~, I
+can see that the IR of ~bfast-cloudy~, after inlining functions and in contrast
+to all other programs in futhark-benchmarks, is not equal to itself... Very
+strange.
+
+Troels says it might be a lazy Eq instance somewhere. Perhaps in PrimExp? It's
+the only place I can see where it always returns false in some cases.
+
+I've tried to remove the last catch-all term from PrimExp, so now there's an
+inexhaustive pattern match. We'll see if it gets triggered when running on
+bfast-cloudy.
+
+Hmm, nope, that doesn't seem to be it...
+
+Ugh...
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+decode @FloatValue "NaNf32" /= decode @FloatValue "NaNf32"
+#+end_src
+
+Because floats, obviously...
+
+I've added a better ~Eq~ instance to ~FloatValue~. We'll see if that does the
+trick.
+
+Yes, that seems to work. Now, when running the [[file:2020-08-10.org::(sexp-errors)][script from a few days ago]], I
+find no errors when translating our benchmarks.
+
+It would be nice to run the same thing on our tests, but some of them are
+supposed to fail. How do we tell them apart?
+
+#+begin_src sh
+rg error **.fut --files-without-match | xargs -n 1 cabal exec futhark -- dev --kernels -a -e --cse --sexp  >/dev/null
+#+end_src
+
+I'm missing a lot of files... Hopefully it's good enough with the benchmark
+tests.
+
+Well, I didn't get around to do the graph colouring today. Hopefully tomorrow
+will be the day.
