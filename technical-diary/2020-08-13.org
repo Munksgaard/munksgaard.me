@@ -1,0 +1,94 @@
+#+TITLE: 2020-08-13
+#+DATE: <2020-08-13 Thu>
+
+* Graph coloring
+
+In general, k-coloring a graph is NP-complete, so there are no effective
+algorithms to do it. Torbens book suggests a recursive heuristic method that
+could work alright for our problem. However, our problem is different from the
+usual register allocation problem, in that we aren't limited in the number of
+"registers" we can use. Instead, our allocations have sizes, and so the overall
+goal is both to minimize the /number/ of allocations, but also the total
+size. We wish to minimize the number of allocations because each allocation
+takes time, and we want to minimize the total size because we wish to increase
+the chance that the final program fits within shared memory in a GPU
+workgroup. By order of prioritization, I think it's /more/ important to minimize
+the total size, simply because shared memory is so much faster than global
+memory, and so every additional program that can fit in shared memory is a win.
+
+However, before we think too much about how to minimize the total size of
+allocations, let's try to do something stupid that works. The [[https://en.wikipedia.org/wiki/Greedy_coloring][greedy coloring]]
+algorithm looks easy to implement, doesn't handle spilling (which we don't
+need), and should be good enough that we can implement the rest of the pass and
+optimise programs such as ~psum~.
+
+** Greedy Coloring
+
+So, let's try to implement greedy coloring.
+
+Here's the algorithm, taken from [[https://en.wikipedia.org/wiki/Greedy_coloring#Algorithm][Wikipedia]]:
+
+#+begin_src python -r -n
+def first_available(color_list):
+    """Return smallest non-negative integer not in the given list of colors."""
+    color_set = set(color_list)
+    count = 0
+    while True:
+        if count not in color_set:
+            return count
+        count += 1
+
+def greedy_color(G, order):
+    """Find the greedy coloring of G in the given order.
+    The representation of G is assumed to be like https://www.python.org/doc/essays/graphs/
+    in allowing neighbors of a node/vertex to be iterated over by "for w in G[node]".
+    The return value is a dictionary mapping vertices to their colors."""
+    color = dict()
+    for node in order:
+        used_neighbour_colors = [color[nbr] for nbr in G[node]
+                                 if nbr in color]
+        color[node] = first_available(used_neighbour_colors)
+    return color
+#+end_src
+
+Alright, well that was actually [[https://github.com/Munksgaard/futhark-linear-scan/commit/b850c7d9bdaef1cd81bea70e4223dc7fb9c9b7b9#diff-e661e7c450836b0ffe3c4ce6ce77d03b][fairly easy to port]]. Now that we have that, we
+can move on to the next bit we need for ReuseAllocations: A pass to collect all
+the different sizes that are allocated.
+
+For reference, here's what the algorithm currently looks like, in broad terms:
+
+ 1. For each kernel $k$ in the program:
+    1. Find the interference graph $g$.
+    2. Obtain a graph coloring $c$ of $g$.
+    3. Make a map of all the memory blocks and their sizes in the kernel,
+       $sizeMap$.
+    4. For each color $c_i$ in $c$:
+       1. Insert at the beginning of $k$ an allocation of a block $b_i$ with the
+          size $m$, where $m$ is the max of all the sizes of memory blocks with
+          the color $c_i$.
+       2. Replace all allocations of memory blocks with the color $c_i$ with
+          $b_i$.
+ 2. Run the simplifier to remove all extraneous allocs(?)
+
+Ah, I'm adding some more tests to GreedyColoringTests before I move on.
+
+Oh, interesting! My ~Graph~ structure cannot represent graphs with no
+intersections. That's not good, since it means that the graph coloring will be
+empty, and the memory blocks won't be assigned a color. The trivial thing to do
+is of course to fix that in post, by arbitrarily coloring all those VNames that
+are not in the graph coloring. Yeah, that should do it. I just need to keep it
+in mind in step 1.1 above.
+
+Now for the bit about finding memory blocks and sizes. First of all, I should
+probably be able to reuse the ~analyseKernels~ function from
+~Interference~. It's currently hard-coded to work for the interference graph,
+but really, we might want something more general?
+
+Perhaps the ~analyseKernels~ function should really reside in
+~ReuseAllocations~? After all, the kernels are distinct, and there should be no
+overlap between local allocations inside each kernel, right? That also
+corresponds more closely to the algorithm I described above. Currently,
+~Interference~ and the others, work on the whole program, but really we're
+interested in versions that work on a given kernel.
+
+I got started, I'll continue tomorrow.
