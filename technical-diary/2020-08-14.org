@@ -1,0 +1,10 @@
+#+TITLE: 2020-08-14
+#+DATE: <2020-08-14 Fri>
+
+* Reusing allocations
+
+Let's continue our work to generalize ~analyseKernels~ and use it in
+~ReuseAllocations~.
+
+Well, that was an unproductive day. I did some work on ~ReuseAllocations~, but
+nothing really finished.
