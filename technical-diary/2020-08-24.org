@@ -1,0 +1,31 @@
+#+TITLE: 2020-08-24
+#+DATE: <2020-08-24 Mon>
+
+* Status
+
+Back from break today. I have a handful of miscellaneous stuff that I need to do
+today, so I don't expect to see much progress with regards to my allocation
+reuse. Oh, and ICFP is on, so I'll try to follow at least some of the
+presentations there. I will try to get back in flow however.
+
+In general, this is the last week before classes start again, and once that
+happens I don't expect to have much time for my research, for at least a couple
+of months. Most of my time will be taken up by teaching and attending courses
+myself. Therefore, I expect this week to be a bit here-and-there, as I try to
+wrap up what I've been working on recently (or at least leave it in a state so
+that it's easy to pick up again when time permits), prepare for my own course
+load and teaching duties, and tick off a number of administrative tasks as well.
+
+* sexp-grammar
+
+I don't like nix. More precisely, I think, I don't like nixpkgs. I'm not sure,
+because the language Nix, nixpkgs, and NixOS are so entwined that it's sometimes
+impossible to know where one ends and another continues. Especially when reading
+manual pages, guides and tutorials. Ugh.
+
+I've tried all day to get the nix derivation for my sexp branch of Futhark too
+use ~haskellPackages.sexp-grammar_2_2_1~ instead of
+~haskellPackages.sexp-grammar~, but nothing seems to work. Error messages are
+absolutely opaque, and so are the functions and tools used within nixpkgs. There
+is no documentation, no manual, no help to get anywhere, and noone seems to know
+how anything works at all.
