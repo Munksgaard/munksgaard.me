@@ -15,7 +15,7 @@
              :email "philip@munksgaard.me"
              :base-directory (caar dir-locals-directory-cache)
              :base-extension "org"
-             :publishing-directory "/ssh:munksgaard.me|sudo:www-data:/var/www/munksgaard.me"
+             :publishing-directory "/ssh:munksgaard.me|sudo:www-data@:/var/www/munksgaard.me"
              :recursive t
              :publishing-function 'org-html-publish-to-html
              :headline-levels 4             ; Just the default for this project.
