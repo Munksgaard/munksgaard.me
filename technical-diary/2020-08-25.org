@@ -1,0 +1,223 @@
+#+TITLE: 2020-08-25
+#+DATE: <2020-08-25 Tue>
+
+* sexp-grammar problems
+
+It still doesn't work in nix-build...
+
+Okay, let's try to step back.
+
+Here is the current ~default.nix~ file that we use:
+
+#+begin_src nix
+# This default.nix builds a tarball containing a statically linked
+# Futhark binary and some manpages.  Likely to only work on linux.
+#
+# Just run 'nix-build' and fish the tarball out of 'result/'.
+
+{ compiler ? "ghc883",
+  suffix ? "nightly",
+  commit ? "" }:
+let
+  sources = import ./nix/sources.nix;
+  pkgs = import sources.nixpkgs {};
+
+  futhark =
+    pkgs.haskell.lib.overrideCabal
+      (pkgs.haskell.lib.addBuildTools
+        (let foo =pkgs.haskell.packages.${compiler}.callCabal2nix "futhark"
+          ( pkgs.lib.cleanSourceWith { filter = name: type:
+                                         baseNameOf (toString name) != "default.nix";
+                                       src = pkgs.lib.cleanSource ./.;
+                                     })
+          { };
+         in foo.override { sexp-grammar = pkgs.haskellPackages.sexp-grammar_2_2_1;} )
+        [ pkgs.python37Packages.sphinx ])
+    ( _drv: {
+      isLibrary = false;
+      isExecutable = true;
+      enableSharedExecutables = false;
+      enableSharedLibraries = false;
+      enableLibraryProfiling = false;
+      configureFlags = [
+        "--ghc-option=-optl=-static"
+        "--ghc-option=-split-sections"
+        "--extra-lib-dirs=${pkgs.ncurses.override { enableStatic = true; }}/lib"
+        "--extra-lib-dirs=${pkgs.glibc.static}/lib"
+        "--extra-lib-dirs=${pkgs.gmp6.override { withStatic = true; }}/lib"
+        "--extra-lib-dirs=${pkgs.zlib.static}/lib"
+        "--extra-lib-dirs=${pkgs.libffi.overrideAttrs (old: { dontDisableStatic = true; })}/lib"
+        ];
+
+      postBuild = (_drv.postBuild or "") + ''
+        make -C docs man
+        '';
+
+      postInstall = (_drv.postInstall or "") + ''
+        mkdir -p $out/share/man/man1
+        cp docs/_build/man/*.1 $out/share/man/man1/
+        mkdir -p $out/share/futhark/
+        cp LICENSE $out/share/futhark/
+        '';
+      }
+    );
+in pkgs.stdenv.mkDerivation rec {
+  name = "futhark-" + suffix;
+  version = futhark.version;
+  src = tools/release;
+
+  buildInputs = [ futhark ];
+
+  buildPhase = ''
+    cp -r skeleton futhark-${suffix}
+    cp -r ${futhark}/bin futhark-${suffix}/bin
+    mkdir -p futhark-${suffix}/share
+    cp -r ${futhark}/share/man futhark-${suffix}/share/
+    chmod +w -R futhark-${suffix}
+    cp ${futhark}/share/futhark/LICENSE futhark-${suffix}/
+    [ "${commit}" ] && echo "${commit}" > futhark-${suffix}/commit-id
+    tar -Jcf futhark-${suffix}.tar.xz futhark-${suffix}
+  '';
+
+  installPhase = ''
+    mkdir -p $out
+    cp futhark-${suffix}.tar.xz $out/futhark-${suffix}.tar.xz
+  '';
+}
+#+end_src
+
+And here is the result from running ~nix-build~:
+
+#+begin_src
+warning: dumping very large path (> 256 MiB); this may run out of memory
+these derivations will be built:
+  /nix/store/49fzfx2pghf03glgq180p979hj5gvz5x-futhark-0.17.0.drv
+  /nix/store/918ayk0lg08384nvk35524a470937kgj-futhark-nightly.drv
+building '/nix/store/49fzfx2pghf03glgq180p979hj5gvz5x-futhark-0.17.0.drv'...
+setupCompilerEnvironmentPhase
+Build with /nix/store/sw8wj4ibx74pzms3srcxv11r1mkv686p-ghc-8.8.3.
+unpacking sources
+unpacking source archive /nix/store/ga1zixkxh1fhqairvck2ipl13g05n5v0-source
+source root is source
+patching sources
+compileBuildDriverPhase
+setupCompileFlags: -package-db=/build/setup-package.conf.d -j8 +RTS -A64M -RTS -threaded -rtsopts
+[1 of 1] Compiling Main             ( Setup.hs, /build/Main.o )
+Linking Setup ...
+configuring
+configureFlags: --verbose --prefix=/nix/store/sgkhs0qz08smawh49nkx2j7cl5bgz413-futhark-0.17.0 --libdir=$prefix/lib/$compiler --libsubdir=$abi/$libname --docdir=/nix/store/psxzfv7abi365wdh2m21smmaqcw063hp-futhark-0.17.0-doc/share/doc/futhark-0.17.0 --with-gcc=gcc --package-db=/build/package.conf.d --ghc-options=-j8 +RTS -A64M -RTS --disable-split-objs --disable-library-profiling --disable-profiling --disable-shared --disable-coverage --enable-static --disable-executable-dynamic --enable-tests --disable-benchmarks --enable-library-vanilla --disable-library-for-ghci --ghc-option=-split-sections --ghc-option=-optl=-static --ghc-option=-split-sections --extra-lib-dirs=/nix/store/njky7z2avvqssj205lgl1l5wgyv7kjxc-ncurses-6.2/lib --extra-lib-dirs=/nix/store/mv9pjrik0yavnn9x8bv5n874hdk5nsjn-glibc-2.31-static/lib --extra-lib-dirs=/nix/store/0rj24w6kkf4qqy4m2h0dwykxb3h80xw9-gmp-6.2.0/lib --extra-lib-dirs=/nix/store/b765d5ml34hi943dl5cdbigd0xshzwqy-zlib-1.2.11-static/lib --extra-lib-dirs=/nix/store/70d9yxyl1s26nzh8wanxb6m69c40mxq7-libffi-3.3/lib --extra-lib-dirs=/nix/store/s2kyldk2s42n5z2ijjj1v5ns78n9wzr3-ncurses-6.2/lib --extra-lib-dirs=/nix/store/j10bd2d07crrnnpx0d9x2xbp3z4m86ql-libffi-3.3/lib --extra-lib-dirs=/nix/store/wz036jl93ix2y9ky0n31v1h60ffafafc-gmp-6.2.0/lib --extra-lib-dirs=/nix/store/h1cakbk04dp307h3qm5prkmiy8jffihg-sexp-grammar-2.2.1/lib --extra-lib-dirs=/nix/store/0y5gmpxgg8qnzhqvvab40gfvcy500jfb-invertible-grammar-0.1.3/lib --extra-lib-dirs=/nix/store/8jpln72lncil1f8kq1ghal0rxdpjxclp-bifunctors-5.5.7/lib --extra-lib-dirs=/nix/store/5j0v692ibbz1x3gc4kjmf42aj2s3dv2q-base-orphans-0.8.2/lib --extra-lib-dirs=/nix/store/ss14s3l9k0j79qfm7hd316ci3clry768-comonad-5.0.6/lib --extra-lib-dirs=/nix/store/xhyza59a1sx6p8hxp9rzc0v5m42ffmcw-distributive-0.6.2/lib --extra-lib-dirs=/nix/store/x3yy191vk2bl0c4ykn2vs9yyd72b1k1f-tagged-0.8.6/lib --extra-lib-dirs=/nix/store/x3yy191vk2bl0c4ykn2vs9yyd72b1k1f-tagged-0.8.6/lib --extra-lib-dirs=/nix/store/0637ps5fpf7yy84c8rm87d29bryb48vv-transformers-compat-0.6.5/lib --extra-lib-dirs=/nix/store/jm13zg5g0j8ni69wk7ix08cqxp1m4kqd-th-abstraction-0.3.2.0/lib --extra-lib-dirs=/nix/store/28hmjppg1xl3jrgg9hcn27ba9c818aiy-prettyprinter-1.6.2/lib --extra-lib-dirs=/nix/store/ig21cpqif311wdzywxw4cps9b2phrm5b-profunctors-5.5.2/lib --extra-lib-dirs=/nix/store/ycmnk609pdzgxj20j4an3zj8d8ap4zlw-contravariant-1.5.2/lib --extra-lib-dirs=/nix/store/74lqyzk71ia1ig05vqgy8qs9ngd4wzyp-StateVar-1.2/lib --extra-lib-dirs=/nix/store/vfs2fxgs6f83ywadpmc5aq91paj5nngz-semigroups-0.19.1/lib --extra-lib-dirs=/nix/store/f9l75jgiasl9y2bqr11zynqrwxgaiy5r-recursion-schemes-5.1.3/lib --extra-lib-dirs=/nix/store/01x183hqqqzaklhb9ba84bs77mx1ialp-free-5.1.3/lib --extra-lib-dirs=/nix/store/798401php991zyngjvhvx0nzlfj67yll-exceptions-0.10.4/lib --extra-lib-dirs=/nix/store/31wx6imnnhg54j11dsmgjnxw3g08pvwd-semigroupoids-5.3.4/lib --extra-lib-dirs=/nix/store/apx8q2fjnncv0zlf5jhm75fa8y3x2jdq-hashable-1.3.0.0/lib --extra-lib-dirs=/nix/store/dsh45z8lcvwb97wp109x2lald0qc5rba-unordered-containers-0.2.10.0/lib --extra-lib-dirs=/nix/store/s0f12s0fhra8wgfkpmyw99fj3qd9af2k-transformers-base-0.4.5.2/lib --extra-lib-dirs=/nix/store/rcb4gl0v4nfx8cawn1lqcgmn9xf3r8q7-scientific-0.3.6.2/lib --extra-lib-dirs=/nix/store/vk4qqflllhdfrlkxm6nadqdim4k3jkrx-integer-logarithms-1.0.3/lib --extra-lib-dirs=/nix/store/zbfharcmkgyim54c250mchdic3v3a8w2-primitive-0.7.0.1/lib --extra-lib-dirs=/nix/store/hmybhssy3695b84abvdb19dx3cicl849-utf8-string-1.0.1.1/lib
+Using Parsec parser
+Configuring futhark-0.17.0...
+CallStack (from HasCallStack):
+  die', called at libraries/Cabal/Cabal/Distribution/Simple/Configure.hs:1022:20 in Cabal-3.0.1.0:Distribution.Simple.Configure
+  configureFinalizedPackage, called at libraries/Cabal/Cabal/Distribution/Simple/Configure.hs:475:12 in Cabal-3.0.1.0:Distribution.Simple.Configure
+  configure, called at libraries/Cabal/Cabal/Distribution/Simple.hs:625:20 in Cabal-3.0.1.0:Distribution.Simple
+  confHook, called at libraries/Cabal/Cabal/Distribution/Simple/UserHooks.hs:65:5 in Cabal-3.0.1.0:Distribution.Simple.UserHooks
+  configureAction, called at libraries/Cabal/Cabal/Distribution/Simple.hs:180:19 in Cabal-3.0.1.0:Distribution.Simple
+  defaultMainHelper, called at libraries/Cabal/Cabal/Distribution/Simple.hs:125:42 in Cabal-3.0.1.0:Distribution.Simple
+  defaultMainWithHooks, called at Setup.hs:6:8 in main:Main
+Setup: Encountered missing or private dependencies:
+sexp-grammar >=2.2.1
+
+builder for '/nix/store/49fzfx2pghf03glgq180p979hj5gvz5x-futhark-0.17.0.drv' failed with exit code 1
+cannot build derivation '/nix/store/918ayk0lg08384nvk35524a470937kgj-futhark-nightly.drv': 1 dependencies couldn't be built
+error: build of '/nix/store/918ayk0lg08384nvk35524a470937kgj-futhark-nightly.drv' failed
+#+end_src
+
+The problem probably stems from the ~callCabal2nix~ function call. To see why,
+here is the result of running ~cabal2nix .~ in the futhark directory:
+
+#+begin_src nix
+{ mkDerivation, aeson, alex, ansi-terminal, array, base, binary
+, blaze-html, bytestring, cmark-gfm, containers, directory
+, directory-tree, dlist, file-embed, filepath, free, gitrev, happy
+, haskeline, language-c-quote, mainland-pretty, megaparsec, mtl
+, neat-interpolation, parallel, parser-combinators, pcg-random
+, process, process-extras, QuickCheck, regex-tdfa, sexp-grammar
+, srcloc, stdenv, tasty, tasty-hunit, tasty-quickcheck
+, template-haskell, temporary, terminal-size, text, time
+, transformers, unordered-containers, utf8-string, vector
+, vector-binary-instances, versions, zip-archive, zlib
+}:
+mkDerivation {
+  pname = "futhark";
+  version = "0.17.0";
+  src = ./.;
+  isLibrary = true;
+  isExecutable = true;
+  libraryHaskellDepends = [
+    aeson ansi-terminal array base binary blaze-html bytestring
+    cmark-gfm containers directory directory-tree dlist file-embed
+    filepath free gitrev haskeline language-c-quote mainland-pretty
+    megaparsec mtl neat-interpolation parallel pcg-random process
+    process-extras regex-tdfa sexp-grammar srcloc template-haskell
+    temporary terminal-size text time transformers unordered-containers
+    utf8-string vector vector-binary-instances versions zip-archive
+    zlib
+  ];
+  libraryToolDepends = [ alex happy ];
+  executableHaskellDepends = [ base text ];
+  testHaskellDepends = [
+    base containers megaparsec mtl parser-combinators QuickCheck
+    sexp-grammar tasty tasty-hunit tasty-quickcheck text
+  ];
+  homepage = "https://futhark-lang.org";
+  description = "An optimising compiler for a functional, array-oriented language";
+  license = stdenv.lib.licenses.isc;
+}
+#+end_src
+
+The version of sexp-grammar in nixpkgs behind the derivation
+~haskellPackages.sexp-grammar~ is 2.1.0, and we want to use version
+2.2.1. Fortunately, it is also available in nixpkgs, under the name
+~haskellPackages.sexp-grammar_2_2_1~. Unfortunately, there seems to be no easy
+way to force cabal2nix to use that version instead of the 2.1.0 version.
+
+Ugh, I ended up with [[https://github.com/diku-dk/futhark/pull/1078/commits/f3bfc42ccb66c3441a06e4b6fbf5fa7a562e6a1a][this]] ugly monstrosity, with ~futhark.nix~ generated by
+~cabal2nix~ and hand-edited to use ~sexp-grammar_2_2_1~ instead of
+~sexp-grammar~. At least it looks like it works now.
+
+* Interference graphs and OptionPricing
+
+First up, Cosmin asked if my algorithm so far produced any reasonable output on
+the OptionPricing example. Indeed, running futhark-linear-scan on the
+OptionPricing benchmark outputs a coloring that merges 12 memory blocks to 4:
+
+#+begin_src haskell
+  coloring: [(dir_vs_mem_9177, 3), (mem_9233, 3), (mem_9250, 4), (mem_9263, 3), (mem_9278, 3),
+             (mem_9327, 4), (mem_9339, 3), (mem_9352, 0), (mem_9380, 0), (inpacc_mem_9397, 2),
+             (acc0_mem_9402, 1), (mem_9423, 0)]
+#+end_src
+
+I have not yet determined if this is actually a valid coloring for this program,
+but perhaps I should.
+
+* TRAMP problems
+
+When trying to upload my blog contents I get a new error message:
+
+#+begin_src
+Host name ‘www-data’ does not match ‘^munksgaard\.me$’
+#+end_src
+
+I get the same thing when I try to manually ssh to
+~/ssh:munksgaard.me|sudo:www-data:~.
+
+Something changed in [[https://www.gnu.org/software/emacs/news/NEWS.27.1][Emacs 27.1]]:
+
+#+begin_quote
+For some connection methods, like "su" or "sudo", the host name in
+multi-hop file names must match the previous hop.  Default host names
+are adjusted to the host name from the previous hop.
+#+end_quote
+
+I was able to fix the error above by using ~/ssh:munksgaard.me|sudo:www-data@:~
+as the TRAMP address. It seems to auto-expand to
+~/ssh:munksgaard.me|sudo:www-data@munksgaard.me:~.
+
+Perhaps I was using TRAMP incorrectly before? Many of the files on my remote
+system seems to have been owned by root instead of www-data, so perhaps the old
+TRAMP string actually used ~www-data~ as the hostname? I'm surprised it ever
+worked, if that's the case.
+
+Anyway, it seems to work now.
