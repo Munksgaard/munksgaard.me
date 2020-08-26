@@ -1,0 +1,310 @@
+#+TITLE: 2020-08-26
+#+DATE: <2020-08-26 Wed>
+
+* ReuseAllocations
+
+We're getting closer and closer to a ReuseAllocations.
+
+For reference, here is the graph and coloring for psum.fut:
+
+#+begin_src haskell
+graph = [(mem_764, mem_768), (mem_768, mem_772)]
+
+coloring = [(mem_764, 0), (mem_768, 1), (mem_772, 0)]
+#+end_src
+
+There are two colors, but for some reason, my ~optimiseKernel~ produces three
+colors?
+
+Eh, there's something strange going on when I call analyseSegOps directly. By
+hoisting the interference graph analysis, I seemed to fix the problem. Is this a
+long-term solution though? We need the interference graphs to be per-kernel. I
+guess they are so now.
+
+I now have... something:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  #[incremental_flattening(only_intra)]
+  let {i64 binop_x_774} = sext i32 impl₀_245 to i64
+  #[incremental_flattening(only_intra)]
+  let {i64 binop_y_775} = sext i32 impl₁_246 to i64
+  #[incremental_flattening(only_intra)]
+  let {i64 binop_x_776} = mul_nw64(binop_x_774, binop_y_775)
+  #[incremental_flattening(only_intra)]
+  let {i64 bytes_773} = mul_nw64(4i64, binop_x_776)
+  #[incremental_flattening(only_intra)]
+  let {mem mem_777} =
+    alloc(bytes_773)
+  let {i64 binop_x_763} = binop_y_775
+  let {i64 bytes_762} = mul_nw64(4i64, binop_y_775)
+  let {i64 binop_x_767} = binop_y_775
+  let {i64 bytes_766} = bytes_762
+  let {i64 binop_x_771} = binop_y_775
+  let {i64 bytes_770} = bytes_762
+  #[incremental_flattening(only_intra)]
+  -- res_408 : [impl₀_245][impl₁_246]i32@@mem_777->
+  -- {base: [impl₀_245, impl₁_246]; contiguous: True; LMADs: [{offset: 0i32;
+  --                                                           strides: [impl₁_246, 1i32];
+  --                                                           rotates: [0i32, 0i32];
+  --                                                           shape: [impl₀_245, impl₁_246];
+  --                                                           permutation: [0, 1];
+  --                                                           monotonicity: [Inc, Inc]}]}
+  let {[impl₀_245][impl₁_246]i32 res_408} =
+    segmap_group
+    (#groups=impl₀_245; groupsize=impl₁_246)
+    (gtid_292 < impl₀_245) (~phys_tid_305) : {[impl₁_246]i32} {
+      let {mem color_778} =
+        alloc(bytes_762)
+      let {mem color_779} =
+        alloc(bytes_762)
+      let {mem@local mem_764} = color_778                          -- ref:mem_764
+      -- resarr0_415 : [impl₁_246]i32@@mem_764->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_415} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_416, i32 x_417) =>
+            let {i32 res_418} = add32(x_416, x_417)
+            in {res_418}})
+        (gtid_295 < impl₁_246) (~phys_tid_296) : {i32} {
+          let {i32 x_419} = xss_247[gtid_292, gtid_295]
+          return {returns x_419}
+        }
+      let {mem@local mem_768} = color_779
+      -- resarr0_425 : [impl₁_246]i32@@mem_768->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_425} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_426, i32 x_427) =>
+            let {i32 res_428} = add32(x_426, x_427)
+            in {res_428}})
+        (gtid_297 < impl₁_246) (~phys_tid_298) : {i32} {
+          let {i32 x_429} = resarr0_415[gtid_297]
+          return {returns x_429}
+        }
+      let {mem@local mem_772} = color_778
+      -- resarr0_434 : [impl₁_246]i32@@mem_772->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_434} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_435, i32 x_436) =>
+            let {i32 res_437} = add32(x_435, x_436)
+            in {res_437}})
+        (gtid_299 < impl₁_246) (~phys_tid_300) : {i32} {
+          let {i32 x_438} = resarr0_425[gtid_299]
+          return {returns x_438}
+        }
+      return {returns resarr0_434}
+    }
+#+end_src
+
+There's (at least) one problem though: I don't take the allocation space into
+account. For instance, on line [[(mem_764)]], ~color_778~, a memory block residing
+in default memory, is assigned to ~mem_764~, which is supposed to reside in
+local memory. Somehow, we need to make either the interference graph, the
+coloring algorithm, or the allocation reuser (or some combination of the three)
+aware of memory space such that only memory blocks in the same memory space are
+merged, and such that the new colored blocks are allocated in the correct space.
+
+By manually setting the space to ~Space "local"~, we can inspect what the code
+would look like:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+-- xss_247 : [impl₀_245][impl₁_246]i32@@xss_mem_759->
+-- {base: [impl₀_245, impl₁_246]; contiguous: True; LMADs: [{offset: 0i32;
+--                                                           strides: [impl₁_246, 1i32];
+--                                                           rotates: [0i32, 0i32];
+--                                                           shape: [impl₀_245, impl₁_246];
+--                                                           permutation: [0, 1];
+--                                                           monotonicity: [Inc, Inc]}]}
+entry {*[?0][?1]i32@?2->
+       {base: [?0, ?1]; contiguous: True; LMADs: [{offset: 0i32;
+                                                   strides: [?1, 1i32];
+                                                   rotates: [0i32, 0i32];
+                                                   shape: [?0, ?1];
+                                                   permutation: [0, 1];
+                                                   monotonicity: [Inc, Inc]}]}}
+main (mem xss_mem_759, i32 impl₀_245, i32 impl₁_246,
+      [impl₀_245][impl₁_246]i32 xss_247) = {
+  #[incremental_flattening(only_intra)]
+  let {i64 binop_x_774} = sext i32 impl₀_245 to i64
+  #[incremental_flattening(only_intra)]
+  let {i64 binop_y_775} = sext i32 impl₁_246 to i64
+  #[incremental_flattening(only_intra)]
+  let {i64 binop_x_776} = mul_nw64(binop_x_774, binop_y_775)
+  #[incremental_flattening(only_intra)]
+  let {i64 bytes_773} = mul_nw64(4i64, binop_x_776)
+  #[incremental_flattening(only_intra)]
+  let {mem mem_777} =
+    alloc(bytes_773)
+  let {i64 bytes_762} = mul_nw64(4i64, binop_y_775)
+  #[incremental_flattening(only_intra)]
+  -- res_408 : [impl₀_245][impl₁_246]i32@@mem_777->
+  -- {base: [impl₀_245, impl₁_246]; contiguous: True; LMADs: [{offset: 0i32;
+  --                                                           strides: [impl₁_246, 1i32];
+  --                                                           rotates: [0i32, 0i32];
+  --                                                           shape: [impl₀_245, impl₁_246];
+  --                                                           permutation: [0, 1];
+  --                                                           monotonicity: [Inc, Inc]}]}
+  let {[impl₀_245][impl₁_246]i32 res_408} =
+    segmap_group
+    (#groups=impl₀_245; groupsize=impl₁_246)
+    (gtid_292 < impl₀_245) (~phys_tid_305) : {[impl₁_246]i32} {
+      let {mem@local color_778} =
+        alloc(bytes_762, @local)
+      let {mem@local color_779} =
+        alloc(bytes_762, @local)
+      -- resarr0_415 : [impl₁_246]i32@@color_778->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_415} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_416, i32 x_417) =>
+            let {i32 res_418} = add32(x_416, x_417)
+            in {res_418}})
+        (gtid_295 < impl₁_246) (~phys_tid_296) : {i32} {
+          let {i32 x_419} = xss_247[gtid_292, gtid_295]
+          return {returns x_419}
+        }
+      -- resarr0_425 : [impl₁_246]i32@@color_779->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_425} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_426, i32 x_427) =>
+            let {i32 res_428} = add32(x_426, x_427)
+            in {res_428}})
+        (gtid_297 < impl₁_246) (~phys_tid_298) : {i32} {
+          let {i32 x_429} = resarr0_415[gtid_297]
+          return {returns x_429}
+        }
+      -- resarr0_434 : [impl₁_246]i32@@color_778->
+      -- {base: [impl₁_246]; contiguous: True; LMADs: [{offset: 0i32; strides: [1i32];
+      --                                                rotates: [0i32];
+      --                                                shape: [impl₁_246];
+      --                                                permutation: [0];
+      --                                                monotonicity: [Inc]}]}
+      let {[impl₁_246]i32 resarr0_434} =
+        segscan_thread
+        (#groups=impl₀_245; groupsize=impl₁_246)
+        ({{0i32},
+          [],
+          fn {i32} (i32 x_435, i32 x_436) =>
+            let {i32 res_437} = add32(x_435, x_436)
+            in {res_437}})
+        (gtid_299 < impl₁_246) (~phys_tid_300) : {i32} {
+          let {i32 x_438} = resarr0_425[gtid_299]
+          return {returns x_438}
+        }
+      return {returns resarr0_434}
+    }
+  in {impl₀_245, impl₁_246, mem_777, res_408}
+}
+#+end_src
+
+Promising, I think!
+
+However, calling my program on OptionPricing.fut results in an error:
+
+#+begin_src
+$ cabal run futhark-linear-scan -- ../futhark-benchmarks/finpar/OptionPricing.fut
+Up to date
+optimise graph: [(dir_vs_mem_9186, inpacc_mem_9405), (dir_vs_mem_9186, acc0_mem_9410),
+ (dir_vs_mem_9186, mem_9431), (mem_9241, inpacc_mem_9405), (mem_9241,
+                                                            acc0_mem_9410),
+ (mem_9241, mem_9431), (mem_9258, mem_9271), (mem_9258, mem_9286), (mem_9258,
+                                                                    inpacc_mem_9405),
+ (mem_9258, acc0_mem_9410), (mem_9258, mem_9431), (mem_9271, inpacc_mem_9405),
+ (mem_9271, acc0_mem_9410), (mem_9271, mem_9431), (mem_9286, inpacc_mem_9405),
+ (mem_9286, acc0_mem_9410), (mem_9286, mem_9431), (mem_9335, mem_9347),
+ (mem_9335, mem_9360), (mem_9335, inpacc_mem_9405), (mem_9335, acc0_mem_9410),
+ (mem_9347, mem_9360), (mem_9347, inpacc_mem_9405), (mem_9347, acc0_mem_9410),
+ (mem_9360, inpacc_mem_9405), (mem_9360, acc0_mem_9410), (mem_9388,
+                                                          inpacc_mem_9405),
+ (mem_9388, acc0_mem_9410), (inpacc_mem_9405, acc0_mem_9410), (inpacc_mem_9405,
+                                                               mem_9431),
+ (acc0_mem_9410, mem_9431)]
+res:
+
+
+graph: [(dir_vs_mem_9186, inpacc_mem_9405), (dir_vs_mem_9186, acc0_mem_9410),
+ (dir_vs_mem_9186, mem_9431), (mem_9241, inpacc_mem_9405), (mem_9241,
+                                                            acc0_mem_9410),
+ (mem_9241, mem_9431), (mem_9258, mem_9271), (mem_9258, mem_9286), (mem_9258,
+                                                                    inpacc_mem_9405),
+ (mem_9258, acc0_mem_9410), (mem_9258, mem_9431), (mem_9271, inpacc_mem_9405),
+ (mem_9271, acc0_mem_9410), (mem_9271, mem_9431), (mem_9286, inpacc_mem_9405),
+ (mem_9286, acc0_mem_9410), (mem_9286, mem_9431), (mem_9335, mem_9347),
+ (mem_9335, mem_9360), (mem_9335, inpacc_mem_9405), (mem_9335, acc0_mem_9410),
+ (mem_9347, mem_9360), (mem_9347, inpacc_mem_9405), (mem_9347, acc0_mem_9410),
+ (mem_9360, inpacc_mem_9405), (mem_9360, acc0_mem_9410), (mem_9388,
+                                                          inpacc_mem_9405),
+ (mem_9388, acc0_mem_9410), (inpacc_mem_9405, acc0_mem_9410), (inpacc_mem_9405,
+                                                               mem_9431),
+ (acc0_mem_9410, mem_9431)]
+coloring: [(dir_vs_mem_9186, 3), (mem_9241, 3), (mem_9258, 4), (mem_9271, 3), (mem_9286,
+                                                                     3),
+ (mem_9335, 4), (mem_9347, 3), (mem_9360, 0), (mem_9388, 0), (inpacc_mem_9405,
+                                                              2),
+ (acc0_mem_9410, 1), (mem_9431, 0)]
+inverted coloring: [(0, [mem_9360, mem_9388, mem_9431]), (1, [acc0_mem_9410]), (2,
+                                                             [inpacc_mem_9405]),
+ (3, [dir_vs_mem_9186, mem_9241, mem_9271, mem_9286, mem_9347]), (4, [mem_9258,
+                                                                      mem_9335])]
+look up: mem_9360
+allocs: [(mem_9204, bytes_9195), (mem_9241, bytes_9195), (mem_9258, bytes_9254),
+ (mem_9271, bytes_9269), (mem_9286, bytes_9269), (mem_9335, bytes_9198),
+ (mem_9347, bytes_9254), (mem_9360, bytes_9269), (mem_9388, bytes_9198),
+ (mem_9431, size_9430)]
+look up: mem_9388
+look up: mem_9431
+look up: acc0_mem_9410
+futhark-linear-scan: Map.!: given key is not an element in the map
+CallStack (from HasCallStack):
+  error, called at libraries/containers/containers/src/Data/Map/Internal.hs:627:17 in containers-0.6.2.1:Data.Map.Internal
+#+end_src
+
+There's probably an issue with the way I color the graph. For each kernel, I now
+try to color the whole graph, but I really only need the ones that are present
+in the current kernel. That may be the issue I'm running in to with regards to
+OptionPricing. So I should filter the graph first. Then, how do I handle the
+space issue? I guess the easiest thing is to make ~GreedyColoring~ aware or
+memory spaces.
+
+Ah, and I also need to handle names that are not in the graph for some reason
+(they don't overlap with anything).
+
+I think I've handled both now in ~GreedyColoring~. Tomorrow, let's add some tests
+and try to integrate those changes in ~ReuseAllocations~
