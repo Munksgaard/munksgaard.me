@@ -1,0 +1,69 @@
+#+TITLE: 2020-08-27
+#+DATE: <2020-08-27 Thu>
+
+* ReuseAllocations
+
+From yesterday:
+
+#+begin_quote
+Tomorrow, let's add some tests and try to integrate those changes in ~ReuseAllocations~
+#+end_quote
+
+Hereby [[https://github.com/Munksgaard/futhark-linear-scan/commit/318711883d610c3d86975ce6e9f425f42b3baec0][integrated]] and [[https://github.com/Munksgaard/futhark-linear-scan/commit/0f10eb33e5a3e52ffc2b467c96e707c1aa406c8f][tested]].
+
+However, we still have an [[https://github.com/Munksgaard/futhark-linear-scan/commit/318711883d610c3d86975ce6e9f425f42b3baec0#diff-4550db6e1d1f57a6371670bda4e8b78dR146][~undefined~ in ~optimiseKernel~]]. The trouble here is
+that segmented operations other than ~SegMap~ have multiple bodies: A ~SegRed~
+for example, has a main body, and a number of reduction lambdas. How do I know
+which of these to perform my allocations in? Right now, I'm analysing a ~SegOp~,
+so the graph and coloring I get out is for both main body and reduction
+lambdas. Perhaps I need to separate optimising the main body and the reduction
+lambdas? Ask Troels.
+
+Troels says: Disregard the operators in ~SegScan~, ~SegRed~ and ~SegHist~. This
+[[https://github.com/Munksgaard/futhark-linear-scan/commit/fe467b1594162026f20788f178cfbbc9d22c4336][simplifies things a lot]].
+
+After [[https://github.com/Munksgaard/futhark-linear-scan/commit/72e6573ba9b4cb20726cc565d4e233040c75aa71][some additional fixes]], I can now actually successfully run the optimiser
+on ~OptionPricing.fut~. Whether the generated code is still valid is still an
+open question. I'm trying to read it in as an sexp.
+
+* TODO Don't existentialize scalar space in loops
+
+* DONE Factor out some changes from sexp so it can be merged
+
+https://github.com/diku-dk/futhark/pull/1103
+
+https://github.com/diku-dk/futhark/pull/1104
+
+After those have been merged, I should probably rebase all of sexp to clean it
+up a bit.
+
+Ugh, there are problems with the CI Windows build... Troels recently upgraded
+ghc to 8.8.4, perhaps that's the cause? Let's try with 8.8.3 (even though we
+previously used 8.8.2) and another tool called [[https://github.com/actions/setup-haskell][setup-haskell]] instead of manually
+calling chocolatey.
+
+I don't think it's a problem with my code, so I've merged the pull requests
+now. We'll see if it causes any problems.
+
+* TODO Cosmins paper and coalescing
+
+Cosmin proposed starting to think about coalescing. He has a relevant PLDI paper
+(I think [[https://futhark-lang.org/publications/pldi17.pdf][this]] is it).
+
+* LastUse
+
+There's a problem with my LastUse analysis, which causes the generated code for
+OptionPricing to be invalid!
+
+#+begin_src
+cabal run futhark -- dev --kernels -a -e --cse -e futhark-benchmarks/finpar/OptionPricing.fut
+#+end_src
+
+Consider ~mem_23344~. My analysis currently reports it as being last-used in the
+statement assigning to ~lw_dest_23227~. But ~lw_dest_23227~ is actually returned
+as the result of a big loop and is assigned to ~res_22622~, which is used much
+later in the program (statement ~x_22902~). Why does this happen?
+
+For some reason is not in inuse_outside in statement ~x_22902~.
+
+Tomorrow, I need to figure out why.
