@@ -64,6 +64,6 @@ statement assigning to ~lw_dest_23227~. But ~lw_dest_23227~ is actually returned
 as the result of a big loop and is assigned to ~res_22622~, which is used much
 later in the program (statement ~x_22902~). Why does this happen?
 
-For some reason is not in inuse_outside in statement ~x_22902~.
+For some reason ~mem_23344~ is not in ~inuse_outside~ in statement ~x_22902~.
 
 Tomorrow, I need to figure out why.
