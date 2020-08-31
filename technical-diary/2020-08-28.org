@@ -1,0 +1,127 @@
+#+TITLE: 2020-08-28
+#+DATE: <2020-08-28 Fri>
+
+* Yesterday, and the plan for today
+
+#+begin_quote
+For some reason ~mem_23344~ is not in ~inuse_outside~ in statement ~x_22902~.
+
+Tomorrow, I need to figure out why.
+#+end_quote
+
+I guess the problem is that the LastUse analysis reports ~mem_23344~ as being
+last-used in the ~lw_dest_23227~ statement. Why isn't the use in statement
+~res_22622~ being picked up? Ah, no, it's actually also reported as last-used in
+~res_22622~:
+
+#+begin_src
+stm: lw_dest_23227
+inuse0: [inpacc_mem_23491, acc0_mem_23496]
+inuse_outside: [mem_23344, inpacc_mem_23491, acc0_mem_23496]
+new_mems0: [[num_und_22442][num_dates_22444]f32 lw_dest_23227]
+new_mems1: [mem_23344]
+new_mems: [mem_23344]
+meminfo: [, mem_23344,]
+last_use_mems: [mem_23344]
+
+stm: res_22622
+inuse0: [mem_23344, inpacc_mem_23491, acc0_mem_23496, mem_23517]
+inuse_outside: [mem_23344, inpacc_mem_23491, acc0_mem_23496, mem_23517]
+new_mems0: [[num_und_22442][num_dates_22444]f32 res_22622]
+new_mems1: [mem_23344]
+new_mems: [mem_23344]
+meminfo: [mem_23344]
+last_use_mems: [mem_23344]
+#+end_src
+
+Aha, ~result_23224~ is being reported as last-used in statement
+~res_22622~. That's true, but the last-use of ~mem_23344~ that implies should be
+offset by the use of it in ~res_22622~.
+
+I think the problem was that I was uncritically accepting all last-uses from
+inside an expression. I needed to make sure that all new memory blocks in a
+statement are always in use after that statement. [[https://github.com/Munksgaard/futhark-linear-scan/commit/010335243d2956f8b7dc0761938ec7bd46d57dba][Here is the fix]].
+
+Now, it seems like OptionPricing.fut is actually compiling and testing
+successfully! I've now compiled my version of Futhark on gpu04, and am about to
+try running all tests.
+
+Only three errors!
+
+#+begin_src
+$ futhark test --backend=opencl --exclude=no_opencl tests/
+tests/issue708.fut:
+Compiling with --backend=opencl:
+Internal compiler error.
+Please report this at https://github.com/diku-dk/futhark/issues.
+Type error after pass 'reuse allocations':
+In function main
+When checking function body
+In expression of statement {i32 size_5333, i32 size_5334, i32 res_ixfn_5707, i32 res_ixfn_5708,
+ i32 res_ixfn_5711, i32 res_ixfn_5712, i32 res_ixfn_5714, mem res_mem_5717;
+ [size_5333][size_5334][3i32]i8 res_5335}
+Inside the loop body
+In expression of statement {[loop₃_5337][loop₄_5338][list_insertions_arg_5332][3i32]i8 res_5623}
+In expression of statement {mem color_5726}
+In subexp bytes_5685
+Use of unknown variable bytes_5685.
+
+tests/issue1025.fut:
+Compiling with --backend=opencl:
+Warning at tests/issue1025.fut:25:11-13:
+  Unused variable "xp0".
+
+Warning at tests/issue1025.fut:25:18-20:
+  Unused variable "yp0".
+
+Warning at tests/issue1025.fut:28:1-81:12:
+  Entry point parameter
+
+    (rects: [n₅₉]({x: i32, y: i32}, {x: i32, y: i32}))
+
+  will have an opaque type, so the entry point will likely not be callable.
+Internal compiler error.
+Please report this at https://github.com/diku-dk/futhark/issues.
+Type error after pass 'reuse allocations':
+In function main
+When checking function body
+In expression of statement {mem res_mem_9435;
+ [n₅₉_8016][lifted_0_rect_pixel_indices_arg_8050]bool res_8056}
+In expression of statement {[n₅₉_8016][lifted_0_rect_pixel_indices_arg_8050]bool res_8398}
+In expression of statement {i64 maxSubHelper_9441}
+In subexp bytes_9146
+Use of unknown variable bytes_9146.
+
+┌──────────┬────────┬────────┬───────────┐
+│          │ passed │ failed │ remaining │
+├──────────┼────────┼────────┼───────────┤
+│ programs │ 1449   │ 2      │ 0/1451    │
+├──────────┼────────┼────────┼───────────┤
+│ runs     │ 2556   │ 2      │ 0/2558    │
+└──────────┴────────┴────────┴───────────┘
+ (3 program(s) excluded).
+#+end_src
+
+* Supercomputing 2020
+
+Troels suggested attending the Supercomputing conference, or at least look in to
+some of the workshops.
+
+[[https://sc20.supercomputing.org/][This]] is what he's talking about. It [[https://sc20.supercomputing.org/attend/register/][doesn't look expensive]].
+
+Here are some interesting tutorials:
+
+ - [[https://sc20.supercomputing.org/presentation/?id=tut105&sess=sess277][How to program AMD GPU devices with HIP: from writing new applications to porting existing CUDA code]]
+ - [[https://sc20.supercomputing.org/presentation/?id=tut146&sess=sess275][Better Scientific Software]]
+ - [[https://sc20.supercomputing.org/presentation/?id=tut104&sess=sess251][Parallel Computing 101 - Part 1]], although it may be a bit too basic.
+ - [[https://sc20.supercomputing.org/presentation/?id=tut108&sess=sess242][Performance Tuning with the Roofline Model on GPUs and CPUs: Part 1]]
+
+Perhaps there are also some interesting [[https://sc20.supercomputing.org/program/workshops/#schedule][workshops]].
+
+* Glowing Bear and weechat
+
+Today I learned that weechat has a sophisticated [[https://weechat.org/files/doc/stable/weechat_user.en.html#relay_plugin][relay system]], that allows you
+to connect to a running weechat instance from another client. For instance, by
+following the instructions on [[https://www.glowing-bear.org/][Glowing Bear]], I was able to connect to my weechat
+instance on munksgaard.me from the Glowing Bear app. That's neat! Apparently, it
+should also be possible to connect from [[https://github.com/ubergeek42/weechat-android][an android app]]. More clients [[https://weechat.org/about/interfaces/][here]].
