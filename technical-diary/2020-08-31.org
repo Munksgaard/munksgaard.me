@@ -1,0 +1,34 @@
+#+TITLE: 2020-08-31
+#+DATE: <2020-08-31 Mon>
+
+* ReuseAllocations
+
+I figured out what was causing the problems described [[file:2020-08-28.org::*Yesterday, and the plan for today][on Friday]]: Contrary to
+what we believed, not all allocations within kernels are kernel-invariant. The
+fix is to [[https://github.com/Munksgaard/futhark-linear-scan/commit/0d80266fcf0c201f0db2f2d06dd4900928fcfd3d][not try to merge kernel variant memory blocks]]. After this commit, all
+tests in the futhark test directory passes.
+
+I have not actually verified whether all benchmarks also pass. Let's do that
+now.
+
+What's the next step for ReuseAllocations?
+
+OptionPricing was optimised from having 18 allocations to 14, but it hasn't
+resulted in a performance boost. However, the peak memory usage was reduced from
+around 2.15 GB to around 1.94 GB. This is probably expected, as I didn't really
+do much to optimise the allocation reuse.
+
+A good next step might be to take a closer look at OptionPricing, in order to
+identify some further opportunities for optimisations. By manually keeping track
+of the memory blocks in the program, I should be able to see if there are any
+obvious merges that are not happening. It's likely that the ~map~ and ~loop~
+merges that Cosmin has been talking about are necessary. For instance, a ~map~
+that does something trivial should be able to reuse the original memory
+location. Same with a loop.
+
+* Ormolu
+
+I spent a lot of time today trying to (finally) set up ormolu formatting for the
+Futhark project.
+
+Here's the result: https://github.com/diku-dk/futhark/pull/1108
