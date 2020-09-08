@@ -1,0 +1,16 @@
+#+TITLE: 2020-09-01
+#+DATE: <2020-09-01 Tue>
+
+* AP
+
+I'm a TA for AP in this block. I expect it's going to take up a significant
+chunk of my time, but we'll see. Today, we had a meeting, and I worked on
+improving the OnlineTA system a bit.
+
+* Ormolu
+
+Ormolu is now used to format all Futhark code!
+
+https://github.com/diku-dk/futhark/commit/87cc177921ef1b648a9291bb25f674db40da5d33
+
+I probably need to rebase my reuse-allocations PR. Done.
