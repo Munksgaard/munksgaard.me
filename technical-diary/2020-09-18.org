@@ -1,0 +1,6 @@
+#+TITLE: 2020-09-18
+#+DATE: <2020-09-18 Fri>
+
+Nothing much is happening these days, as most of my time is taken up by teaching
+and learning, but I did manage to add some helpful commands to Futhark
+executables: https://github.com/diku-dk/futhark/pull/1131

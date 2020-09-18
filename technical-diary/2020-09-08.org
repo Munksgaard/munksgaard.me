@@ -1,0 +1,134 @@
+#+TITLE: 2020-09-08
+#+DATE: <2020-09-08 Tue>
+
+* Status
+
+So, not a lot has happened since last week. Well, that's not really true,
+because I've been busy with teaching AP (Advanced Programming) and taking PMPH
+(Programming Massively Parallel Hardware). And there was a funeral yesterday...
+
+Anyway, enough excuses. Today and tomorrow I should have ample time to get in to
+OptionPricing.fut and figure out what I need to do to make it faster/require
+less memory.
+
+Perhaps I've been diving at it too hard by only looking at the output kernels?
+Perhaps today I should start by looking at the Futhark code and see if I can
+make sense of /that/ before I move on to the kernels. Perhaps I can even
+identify some patterns directly in the Futhark code that is not being optimised.
+
+* OptionPricing.fut
+
+Oh my, this is... a lot.
+
+So, the main function takes a lot of arguments. One is the ~contract_number~. It
+seems like there are three different types of contracts implemented, each using
+~payoff1~, ~payoff2~ and ~payoff3~ as payoff functions. I don't know what a
+payoff function is, but perhaps that'll make sense later on. Supposedly it has
+to with with how each type of contract settles. Most of the other arguments seem
+to have to do the model or the brownian bridge.
+
+The ~main~ function itself first computes a sobol matrix which it then
+immediately uses to compute a gaussian matrix which in turn is turned into a
+bownian bridge matrix. Now, these are obvious candidates for memory reuse
+(~gauss_mat~ is only used in the computation of ~bb_mat~, so they can share the
+same memory space), but they do not take place /inside/ a kernel, so they would
+not be optimised at all by my current implementation. Instead, I need to look
+for that kind of pattern inside some nested parallelism. For instance, ~payoffs~
+maps over ~bb_mat~, and inside ~bd_row~ is computed as the result of a ~map4~
+and then immediately used. Perhaps that is an area that's worth investigating?
+But those two maps should be fused, right? Let's see what it looks like in the
+kernel. For reference, this is the Futhark code:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let payoffs   = map (\bb_row: [num_models]f32  ->
+                         let bd_row = map4 (blackScholes bb_row) md_cs md_vols md_drifts md_sts
+                         in map3 (genericPayoff contract_number) md_discts md_detvals bd_row)
+                      bb_mat
+#+end_src
+
+
+#+begin_src
+futhark dev --kernels -a -e --cse -e --double-buffer -e --reuse-allocations -e OptionPricing.fut > OptionPricing.kernel
+#+end_src
+
+I've used these highlight settings
+
+#+begin_src futhark
+-- Hi-lock: (("\\_<color_23568\\_>" (0 'hi-blue-b prepend)))
+-- Hi-lock: (("\\_<color_23567\\_>" (0 'hi-black-b prepend)))
+-- Hi-lock: (("\\_<color_23566\\_>" (0 'hi-aquamarine prepend)))
+-- Hi-lock: (("\\_<color_23565\\_>" (0 'hi-salmon prepend)))
+-- Hi-lock: (("\\_<color_23564\\_>" (0 'hi-blue prepend)))
+-- Hi-lock: (("\\_<color_23563\\_>" (0 'hi-green prepend)))
+-- Hi-lock: (("\\_<color_23562\\_>" (0 'hi-pink prepend)))
+-- Hi-lock: (("\\_<color_23561\\_>" (0 'hi-yellow prepend)))
+#+end_src
+
+After highlighting all the associated values, I get this:
+
+#+begin_src
+-- Hi-lock: (("lw_dest_23251" (0 'hi-green prepend)))
+-- Hi-lock: (("res_23057" (0 'hi-green prepend)))
+-- Hi-lock: (("mapout_23249" (0 'hi-green prepend)))
+-- Hi-lock: (("result_23248" (0 'hi-green prepend)))
+-- Hi-lock: (("stream_mapout_23211" (0 'hi-green prepend)))
+-- Hi-lock: (("res_22859" (0 'hi-green prepend)))
+-- Hi-lock: (("stream_mapout_scratch_23212" (0 'hi-green prepend)))
+-- Hi-lock: (("res_linear_nonext_copy_23527" (0 'hi-green prepend)))
+-- Hi-lock: (("res_linear_nonext_copy_23526" (0 'hi-green prepend)))
+-- Hi-lock: (("res_22577" (0 'hi-green prepend)))
+-- Hi-lock: (("lw_dest_23243" (0 'hi-blue prepend)))
+-- Hi-lock: (("mapout_23241" (0 'hi-blue prepend)))
+-- Hi-lock: (("res_22833" (0 'hi-blue prepend)))
+-- Hi-lock: (("result_23240" (0 'hi-blue prepend)))
+-- Hi-lock: (("bbrow_22755" (0 'hi-blue prepend)))
+-- Hi-lock: (("res_22752" (0 'hi-blue prepend)))
+-- Hi-lock: (("lw_dest_23239" (0 'hi-salmon prepend)))
+-- Hi-lock: (("mapout_23237" (0 'hi-salmon prepend)))
+-- Hi-lock: (("res_22792" (0 'hi-salmon prepend)))
+-- Hi-lock: (("result_23236" (0 'hi-salmon prepend)))
+-- Hi-lock: (("lw_dest_23235" (0 'hi-salmon prepend)))
+-- Hi-lock: (("mapout_23233" (0 'hi-salmon prepend)))
+-- Hi-lock: (("x_22631" (0 'hi-salmon prepend)))
+-- Hi-lock: (("result_23232" (0 'hi-salmon prepend)))
+-- Hi-lock: (("lowered_array_23265" (0 'hi-aquamarine prepend)))
+-- Hi-lock: (("lowered_array_updated_23278" (0 'hi-aquamarine prepend)))
+-- Hi-lock: (("lw_dest_23231" (0 'hi-aquamarine prepend)))
+-- Hi-lock: (("lowered_array_updated_23271" (0 'hi-aquamarine prepend)))
+-- Hi-lock: (("lowered_array_23272" (0 'hi-aquamarine prepend)))
+-- Hi-lock: (("modified_source_23266" (0 'hi-aquamarine prepend)))
+-- Hi-lock: (("modified_source_23273" (0 'hi-aquamarine prepend)))
+-- Hi-lock: (("mapout_23229" (0 'hi-aquamarine prepend)))
+-- Hi-lock: (("res_22622" (0 'hi-aquamarine prepend)))
+-- Hi-lock: (("result_23228" (0 'hi-aquamarine prepend)))
+-- Hi-lock: (("res_22598" (0 'hi-green-b prepend)))
+-- Hi-lock: (("lw_dest_23227" (0 'hi-green-b prepend)))
+-- Hi-lock: (("mapout_23225" (0 'hi-green-b prepend)))
+-- Hi-lock: (("result_23224" (0 'hi-green-b prepend)))
+-- Hi-lock: (("lw_dest_23221" (0 'hi-red-b prepend)))
+-- Hi-lock: (("result_23218" (0 'hi-red-b prepend)))
+-- Hi-lock: (("res_22549" (0 'hi-red-b prepend)))
+-- Hi-lock: (("double_buffer_array_23546" (0 'hi-pink prepend)))
+-- Hi-lock: (("inpacc_22565" (0 'hi-pink prepend)))
+-- Hi-lock: (("inpacc_22562" (0 'hi-pink prepend)))
+-- Hi-lock: (("res_double_buffer_copy_23552" (0 'hi-pink prepend)))
+-- Hi-lock: (("double_buffer_array_23547" (0 'hi-yellow prepend)))
+-- Hi-lock: (("res_double_buffer_copy_23553" (0 'hi-yellow prepend)))
+-- Hi-lock: (("acc0_22563" (0 'hi-yellow prepend)))
+-- Hi-lock: (("inpacc_22566" (0 'hi-yellow prepend)))
+-- Hi-lock: (("\\_<color_23568\\_>" (0 'hi-red-b prepend)))
+-- Hi-lock: (("\\_<color_23567\\_>" (0 'hi-green-b prepend)))
+-- Hi-lock: (("\\_<color_23566\\_>" (0 'hi-aquamarine prepend)))
+-- Hi-lock: (("\\_<color_23565\\_>" (0 'hi-salmon prepend)))
+-- Hi-lock: (("\\_<color_23564\\_>" (0 'hi-blue prepend)))
+-- Hi-lock: (("\\_<color_23563\\_>" (0 'hi-green prepend)))
+-- Hi-lock: (("\\_<color_23562\\_>" (0 'hi-pink prepend)))
+-- Hi-lock: (("\\_<color_23561\\_>" (0 'hi-yellow prepend)))
+#+end_src
+
+Perhaps I can get Futhark to output this information automatically?
+
+bbrow_22755 and mapout_23229
+
+Cosmin suggested that I take a look at [[https://github.com/HIPERFIT/finpar/blob/master/OptionPricing/CppOpenCL/GenericPricingPrivOpt.cl][the OpenCL implementation]] in order to
+figure out where memory is being reused.
