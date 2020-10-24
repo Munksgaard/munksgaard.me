@@ -1,0 +1,246 @@
+#+TITLE: Lambdas and Lets - pdb part 2
+#+DATE: <2020-10-24 Sat>
+
+So, this project has been on hold for a long time now, but I always wanted to
+come back and do more on it. Curiously, it turns out that a honeymoon is an excellent time
+for coding on your pet-projects, especially if you hurt your foot so all you can
+really do for the last three days is lie in your hotel-bed. A week
+
+Over those couple of days, I managed to get a bunch of stuff done on the pdb
+project:
+
+ - Improve the REPL experience by using
+   [rustyline](https://github.com/kkawakam/rustyline) instead of my own
+   home-made prompt.
+ - Move to a socket-based client-server architecture, which allows several
+   concurrent clients.
+ - Add support for parsing, typing and interpreting let-bindings, lambdas and
+   function application, including proper HM-style type inference.
+
+The socket-based architecture is still very rudimentary and prone to a lot of
+errors (it only handles one line at a time, for instance), but it was nice to
+get my toes wet. However, the big deal this time around is obviously the lambdas
+and let-bindings. Therefore, I'll use this post to describe how I
+implemented everything in Rust. While type inference was a big part of this
+endeavour, I won't spend too much time on it, as I've already covered HM-style
+inference in [[file:~/src/munksgaard.me/toyml/typechecker.org::+TITLE: Typechecking toyml][this old post]]. I did get some new inspiration from [[https://www.cl.cam.ac.uk/teaching/1415/L28/type-inference.pdf][these lecture
+notes]], but in the end, things turned out pretty much like in toyml.
+
+* Parsing function application
+
+Extending the pdb grammar to include support for let-bindings, and lambdas
+wasn't too had. I settled on a pretty verbose syntax for now, but my thought is
+that I can always go back and change it if needs be.
+
+The syntax looks like this:
+
+#+begin_src
+let f = lambda x -> lambda y -> x let n = 42 in f n 0 end
+#+end_src
+
+Adding the necessary productions to the pest-grammar for lambdas and
+let-bindings was easy enough:
+
+#+begin_src
+letbind = { ( "let" ~ identifier ~ "=" ~ expr )+ ~ "in" ~ expr ~ "end" }
+
+lambda = { "lambda" ~ identifier ~ "->" ~ expr }
+#+end_src
+
+However, function application turned out to be a bit harder. Basically, we want
+to allow an arbitrary number of expressions to follow each other, as in ~f x y
+z~, where each of those can be any kind of expression. In particular, how does
+the parser for ~letbind~ know that ~end~ is a keyword ending the expression
+body, and not just an identifier?
+
+The solution, turned out to be to add a list of keywords to the grammar, and
+explicitly prohibit the ~identifier~ production to produce any of those
+keywords:
+
+#+begin_src
+keyword = { "let" | "insert" | "select" | "from" | "into" | "create" | "end" | "lambda" | "in" }
+
+identifier = @{ !keyword ~ ('a'..'z' ~ ASCII_ALPHANUMERIC*) }
+#+end_src
+
+Then, replacing ~expr~ like so gets us the desired grammar[fn:1]:
+
+#+begin_src
+term = { letbind | unit | tuple | record | int | bool | string | lambda | identifier | "(" ~ expr ~ ")" }
+
+exprs = { term+ }
+#+end_src
+
+To turn the resulting parse tree into a usable grammar, I also needed to add a
+new ~parse_exprs~ function:
+
+#+begin_src rust
+pub fn parse_exprs(mut exprs: Pairs<Rule>) -> Result<Expr, Error<Rule>> {
+    let mut res = parse_term(exprs.next().unwrap().into_inner().next().unwrap())?;
+
+    for term in exprs {
+        res = Expr::Apply(
+            Box::new(res),
+            Box::new(parse_term(term.into_inner().next().unwrap())?),
+        );
+    }
+
+    Ok(res)
+}
+#+end_src
+
+The interesting bit here is the handling of multiple successive expressions (or
+terms, in my weird terminology). We know that there's always at least one
+expression (because of the grammar), so we parse that. Any successive terms turn
+the result into a nested ~Apply~, and this guarantees us the correct precedence
+for function application, where ~x y z~ is interpreted as ~(x y) z~ instead of
+~x (y z)~. I also had to extend the grammar for types to be able to handle a
+type like ~x -> y~, but that was staightforward.
+
+Speaking of the AST, here is how I extended ~Ty~ and ~Expr~, respectively:
+
+#+begin_src rust
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+pub enum Ty {
+    Int,
+    Bool,
+    Tuple(Vec<Ty>),
+    Unit,
+    String,
+    Record(Vec<(Ident, Ty)>),
+    Var(Ident),
+    Fun(Box<Ty>, Box<Ty>),
+}
+#+end_src
+
+#+begin_src rust
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+pub enum Expr {
+    Int(i64),
+    Bool(bool),
+    Tuple(Vec<Expr>),
+    Unit,
+    String(String),
+    Record(Vec<(Ident, Expr)>),
+    Ident(Ident),
+    Let(Vec<(Ident, Expr)>, Box<Expr>),
+    Apply(Box<Expr>, Box<Expr>),
+    Lambda(Ident, Box<Expr>),
+}
+#+end_src
+
+Pretty self-explanatory, although I will note the discrepancy between allowing
+multiple bindings in one let and only allowing one function argument at a
+time. That may be subject to future changes.
+
+* Interpreting lambdas and function calls
+
+After parsing, the expression is typed using HM-style type interference and if
+the expression is correctly typed, we can evaluate it, which is where things get
+a bit hairy.
+
+To give some context, when evaluating an expression, my interpreter turns it
+into an ~Object~, which is a terminal value that can be stored in memory (and
+eventually on disk). For instance, an ~Expr::Int(i)~ is turned into an
+~Object::Int(i)~. Obviously, a ~let~-binding cannot be stored on disk as is, so
+it of course needs to futher evaluated. All of this is not too complicated, but
+what should happen when trying to evaluate a ~lambda~-expression? The usual
+answer for interpreters is to create a closure of some sort, containing a copy
+of the current environment, but this is not quite as straightforward in Rust as
+in other languages. A first attempt at creating the corresponding ~Object~
+constructor ends up looking like this:
+
+#+begin_src rust
+  Closure(Fn(Object) -> Result<Object>),
+#+end_src
+
+But quickly, we will run into the problem that a Fn trait is not sized, so we
+need to box it somehow, but a boxed closure is not clone-able in Rust, and it is
+easy to see why: How will the compiler know when all references to the boxed
+closure are gone? The solution that I ended up with, was to introduce a
+reference-counted indirection, in the form of Rc:
+
+#+begin_src rust
+  Closure(Rc<dyn Fn(Object) -> Result<Object>>),
+#+end_src
+
+Then, creating the closure object is straightforward, as is applying it:
+
+#+begin_src rust
+  Expr::Apply(e1, e2) => {
+      let obj = eval(env, *e2)?;
+      match eval(env, *e1)? {
+          Object::Closure(f) => f(obj),
+          other => unreachable!("{}", other),
+      }
+  }
+  Expr::Lambda(ident, e) => {
+      let env = env.clone();
+      Ok(Object::Closure(Rc::new(move |obj| {
+          eval(&env.insert(&ident, obj), *e.clone())
+      })))
+  }
+#+end_src
+
+* What about the environment?
+
+I should probably talk about the environment as well. To begin with, I
+implemented it using a simple ~HashMap~, but the way it is used is really more
+like a linked list: I'm only ever adding stuff to it, and I make a lot of
+independent clones that need to be shared between different closures. I
+therefore implemented my own linked list, also using ~Rc~:
+
+#+begin_src rust
+  #[derive(Clone)]
+  pub enum Environment {
+      Node(String, Object, Rc<Environment>),
+      Empty,
+  }
+
+  impl Environment {
+      pub fn new() -> Environment {
+          Environment::Empty
+      }
+
+      pub fn lookup(&self, ident: &str) -> Result<&Object> {
+          match self {
+              Environment::Node(s, obj, inner) => {
+                  if s == ident {
+                      Ok(obj)
+                  } else {
+                      inner.lookup(ident)
+                  }
+              }
+              Environment::Empty => Err(anyhow!("Identifier {} not found", ident)),
+          }
+      }
+
+      pub fn insert(&self, ident: &str, obj: Object) -> Environment {
+          Environment::Node(ident.to_string(), obj, Rc::new(self.clone()))
+      }
+  }
+#+end_src
+
+* And now?
+
+So with all this, I can finally define and use functions in my expressions. It's
+not really very pretty at the moment (~insert let x = 42 in x end into user~)
+but it works.
+
+A next easy project is to enable creating persistent declarations, such that
+functions can be reused. It would also be nice to add some builtin functions and
+operators for stuff like basic arithmetic. And finally, at some point, I have to
+think about adding abstract data types. Before I do so, however, I probably need
+to think about how that's going to work in a database setting. For instance,
+should recursive datatypes be allowed, and if so, how should the be stored in
+memory/on disk?
+
+That's it for today however. Hopefully I'll get more work done on this project
+before too long.
+
+* Footnotes
+
+[fn:1] I realize the use of ~term~ here may be a bit confusing to people with
+more parser-experience than me, since it's usually used to introduce precedence
+parsing for handling binary arithmetic operators. I'll probably rename
+everything more sensibly when I want to handle that at some point.
