@@ -1,0 +1,9 @@
+#+TITLE: 2020-09-21
+#+DATE: <2020-09-21 Mon>
+
+* OptionPricing
+
+Cosmin and I tried to make sense of the generated code compared to the
+hand-written one. It was hard. He suggested I try with simpler examples, going
+down to just ~sobol_mat~ in ~OptionPricing.fut~, and compare the results and
+memory block usage with the ones in the hand-written code.

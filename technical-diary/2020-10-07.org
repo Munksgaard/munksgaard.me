@@ -1,0 +1,293 @@
+#+TITLE: 2020-10-07
+#+DATE: <2020-10-07 Wed>
+
+* OptionPricing
+  :LOGBOOK:
+  CLOCK: [2020-10-07 Wed 13:23]--[2020-10-07 Wed 13:48] =>  0:25
+  CLOCK: [2020-10-07 Wed 09:21]--[2020-10-07 Wed 09:46] =>  0:25
+  CLOCK: [2020-10-07 Wed 10:23]--[2020-10-07 Wed 10:48] =>  0:25
+  CLOCK: [2020-10-07 Wed 09:53]--[2020-10-07 Wed 10:18] =>  0:25
+  :END:
+
+  Let's try to figure out how option pricing works, and why the Futhark version
+  needs so many buffers.
+
+  As described [[file:2020-09-21.org::*OptionPricing][previously]], Cosmin and I tried to go through the generated code, but it
+  was hard to keep track of and compare it with the hand-written code. Instead,
+  we'll try to simplify the Futhark-version sufficiently such that we can see
+  what's going.
+
+** Double-buffer problems
+
+   However, there is one problem that's causing us to use extra memory
+   allocations: Double buffering. Because double buffering inserts happens at
+   the end of the kernel, we can have cases where something that needs to be
+   written to the double-buffer is kept alive unnecessarily long. It looks like
+   this:
+
+   #+begin_src futhark
+     let x_mem = alloc(...)
+     let x_res = ...
+     -- something else
+     let x_res_double_buffer = copy(x_res)
+   #+end_src
+
+   If we could somehow move the copy to ~x_res_double_buffer~ up, ~x_mem~ would
+   be free to be used for something else.
+
+** GenericPricingPrivOpt.cl
+
+   Okay, let's try to make sense of what's going on here.
+
+   #+begin_src c
+     __kernel void payoffGPU(
+                             __constant LoopROScalars* ro_scal,      // RO SCALARS
+                             __constant int*           sobol_v_dir,  // RO SOBOL
+                             __constant UCHAR*         fix_index,
+                             // RO Brownian Bridge
+                             __constant int*           bb_ia,
+                             __constant REAL*          bb_coefs,
+                             // RO MODELS DATA
+                             __constant REAL*          model_coefs,
+                             // WO (GLOBAL) VHAT
+                             __global   REAL*          model_vhat,
+                             // LOCAL ARRAYS
+                             __local    REAL*          md_z,
+                             //__local    REAL*          inst_trajWF,
+                             __local    REAL*          vhat_local
+                             ) {
+   #+end_src
+
+   Here's the definition of the main payoff function. Most of the arguments are
+   read-only constants. There is one global array, ~model_vhat~, and two local
+   (shared) arrays, ~md_z~ and ~vhat_local~. In addition, there
+
+    By inspecting the kernel, we can see that ~model_vhat~ is only ever written
+    to at the very end, so it must contain the result of running the kernel.
+
+    It looks like ~vhat_local~ is primarily used when running
+    ~payoffFunction~. I reason that it's used as a result buffer. Afterwards, a
+    segmented scan is performed on ~vhat_local~ and it is written to
+    ~model_vhat~.
+
+    The ~md_z~ shared array is used as a result buffer for the call to
+    ~mlfi_brownianbridge_wiener_pathNoTransGPU~, which computes the brownian
+    bridge. The result is then used to compute ~trajWF~.
+
+    We conclude that these three allocations have rather limited use, and no
+    re-use takes place at all.
+
+    Now, there are further arrays in use in the ~payoffGPU~ kernel:
+
+    #+begin_src c
+      int  sobol_last_num_vec[15];//UINT[ro_scal->sobol_dim];
+      REAL md_zd              [15]; //[ro_scal->sobol_dim];
+    #+end_src
+
+    Each of these are private arrays to each execution unit, although the
+    compiler will probably expand those automatically, so they correspond to
+    shared memory. Let's see what they are used for.
+
+    Fairly quickly, it can be seen that ~sobol_last_num_vec~ is only ever used
+    as an intermediate array in the calls to ~mlfi_genmatrix_uniformGPUind~ and
+    friends. The results are never used at any later point, and neither is
+    memory.
+
+    ~md_zd~, or at least the memory it's allocated in, is used extensively
+    throughout the kernel, both in those calls to
+    ~mlfi_genmatrix_uniform_GPUind~ and friends, which explains why we must have
+    both ~md_zd~ and ~sobol_last_num_vec~[fn:1]. It is first used in
+    ~mlfi_genmatrix_uniform_GPUind~ and friends as a result buffer, then in
+    ~mlfi_ugaussian_Pinv_vector~ as both an input and result buffer and finally
+    in ~mlfi_brownianbridge_wiener_pathNoTransGPU~ as an input buffer. Then
+    something interesting happens:
+
+    #+begin_src c
+      REAL* trajWF    = md_zd;
+    #+end_src
+
+    The memory md_zd is in, is reused for the ~trajWF~ array! ~trajWF~ is filled
+    with numbers computed using ~md_z~ and the result is used as an input array
+    to ~payoffFunction~.
+
+    In conclusion, there are 5 interesting arrays in the
+    ~payoffGPU~ kernel from ~GenericPricingPrivOpt.cl~:
+
+     - ~model_vhat~ is the result buffer for the whole kernel. Resides in global memory.
+     - ~vhat_local~ is the result buffer for the ~payoffFunction~. Resides in
+       shared memory.
+     - ~md_z~ is the result buffer for
+       ~mlfi_brownianbridge_wiener_pathNoTransGPU~. Resides in shared memory.
+     - ~sobol_last_num_vec~ is an intermediate array used inside
+       ~mlfi_genmatrix_uniformGPUind~. It is private to each execution unit, but
+       expanded to reside in shared memory.
+     - ~md_zd~ (and the co-located ~trajWF~) is used for various things
+       throughout the kernel as a result and intermediate buffer.
+
+    Now, the interesting question is: why are there so many buffers used in the
+    Futhark implementation, if this is all we need?
+
+** TODO Figure out which, if any, arrays in the kernel output of OptionPricing.fut correspond to ~model_vhat~, ~md_z~ and ~vhat_local~.
+
+   Let's take a look at the code generated from OptionPricing.fut using the
+   command. Note that we're not reusing allocations here, just to keep it
+   simple.
+
+   #+begin_src
+     futhark-reuse-allocations dev --kernels -a -e --cse -e --double-buffer -e --cse -e OptionPricing.fut | bat -l fut
+   #+end_src
+
+   To start with, I've removed everything after the creation of ~sobol_mat~:
+
+   #+begin_src futhark -n -r -l "-- ref:%s"
+     ...
+     let sobol_mat = map_stream (\chunk (ns: [chunk]i32): [chunk][sobvctsz]f32  ->
+                                   sobolChunk dir_vs (#[unsafe] ns[0]) chunk)
+                                (iota num_mc_it)
+     in sobol_mat |> flatten
+   #+end_src
+
+   Inspecting the resulting code, we see there are a number of allocations
+   inside the kernels:
+
+   #+begin_src futhark -n -r -l "-- ref:%s"
+     ...
+     let {mem mem_7497} = alloc(size_7496)
+     ...
+     let {mem@local mem_7468} = alloc(bytes_7466, @local)
+     ...
+     let {mem@local mem_7472} = alloc(bytes_7466, @local)
+     ...
+   #+end_src
+
+   The two last memory bloks are used as shared memory within a single
+   kernel. Perhaps they correspond to the ~md_zd~ and ~sobol_last_num_vec~ from
+   the OpenCL kernel?
+
+   The Futhark version of the Sobol generators seem much more complicated than
+   the OpenCL version. What's going on there? Hm, maybe it's not so bad...
+
+   Okay, what happens if we introduce the gaussian transformation?
+
+   #+begin_src futhark -n -r -l "-- ref:%s"
+     let sobol_mat = map_stream (\chunk (ns: [chunk]i32): [chunk][sobvctsz]f32  ->
+                                   sobolChunk dir_vs (#[unsafe] ns[0]) chunk)
+                                (iota num_mc_it)
+     let gauss_mat = map ugaussian sobol_mat
+     in gauss_mat |> flatten
+   #+end_src
+
+   Seems like there are no additional allocations happening. That's good. Let's
+   try brownian. Okay, that seems to cause a new allocation to happen, inside a
+   ~segmap_thread~ that handles the brownian bridge. That sounds about right,
+   the ~mlfi_brownianbridge_wiener_pathNoTransGPU~ function from the OpenCL
+   implementation also uses an additional allocation: ~md_z~.
+
+   Next is ~payoffs~:
+
+   #+begin_src futhark -n -r -l "-- ref:%s"
+          let sobol_mat = map_stream (\chunk (ns: [chunk]i32): [chunk][sobvctsz]f32  ->
+                                        sobolChunk dir_vs (#[unsafe] ns[0]) chunk)
+                                     (iota num_mc_it)
+          let gauss_mat = map ugaussian sobol_mat
+          let bb_mat    = map (brownianBridge num_und bb_inds bb_data) gauss_mat
+          let payoffs   = #[incremental_flattening(only_intra)]
+                          map (\bb_row: [num_models]f32  ->
+                                 let bd_row = map4 (blackScholes bb_row) md_cs md_vols md_drifts md_sts
+                                 in map3 (genericPayoff contract_number) md_discts md_detvals bd_row)
+                              bb_mat
+          in payoffs |> flatten
+   #+end_src
+
+   I added the incremental flattening attribute to reduce the total amount of
+   code that I have to look at. I believe this is the interesting kernel anyway.
+
+   A lot happens to the generated code after adding those few lines. I count 6
+   new allocations inside kernels (most of them ~@local~). Ah, perhaps some of
+   those are caused by incremental flattening. There are multiple different
+   versions.
+
+* Footnotes
+
+[fn:1] Although, now that I look at it, it really seems like it should be
+possible to only use one buffer in those functions. The simplest one looks like
+this:
+
+#+begin_src c
+  inline void mlfi_genmatrix_uniformGPUrecOpt(
+                                              UINT f_ind,
+                                              __constant  LoopROScalars* ro_scal,
+                                              __constant  int* sobol_v_dir,
+                                              int* sobol_last_num_vec,
+                                              REAL* md_zd) {
+    UINT j;
+    UINT sob_dim = ro_scal->num_under * ro_scal->num_dates;
+    f_ind *= sob_dim;
+    for(j=0; j < sob_dim; j++) {
+      sobol_last_num_vec[j] ^= sobol_v_dir[ f_ind + j ]; //f_ind * sob_dim
+      md_zd[j]               = sobol_last_num_vec[j] * ro_scal->sob_norm_fact;
+    }
+  }
+#+end_src
+
+I think it should be possible to rewrite it like this:
+
+#+begin_src c
+  inline void mlfi_genmatrix_uniformGPUrecOpt(
+                                              UINT f_ind,
+                                              __constant  LoopROScalars* ro_scal,
+                                              __constant  int* sobol_v_dir,
+                                              int* sobol_last_num_vec,
+                                              REAL* md_zd) {
+    UINT j;
+    UINT sob_dim = ro_scal->num_under * ro_scal->num_dates;
+    f_ind *= sob_dim;
+    for(j=0; j < sob_dim; j++) {
+      md_zd[j] ^= sobol_v_dir[ f_ind + j ]; //f_ind * sob_dim
+      md_zd[j]               = md_zd[j] * ro_scal->sob_norm_fact;
+    }
+  }
+#+end_src
+
+Also, are we really using uninitialized values in ~sobol_last_num_vec~ here?
+
+One of the other functions looks like this:
+
+#+begin_src c
+void mlfi_genmatrix_uniformGPUind (
+                                   UINT seq_count,
+                                   __constant  LoopROScalars* ro_scal,
+                                   __constant  int* sobol_v_dir,
+                                   int* sobol_last_num_vec,
+                                   REAL* md_zd
+                                   ) {
+  UINT  j, k, gs, gv_k = 0;
+
+  seq_count += 1;
+  gs = seq_count >> 1;
+  gs = seq_count ^  gs;
+
+  UINT sob_dim = ro_scal->num_under * ro_scal->num_dates;
+
+  for( j = 0; j < sob_dim; j++ )
+    sobol_last_num_vec[j] = 0;
+  for( k = 0; k < ro_scal->sobol_bits; ++k ) {
+    if(gs & 1) {
+      __constant int* dir_vect
+        = sobol_v_dir + k*sob_dim;
+      for( j=0; j < sob_dim; j++ ) {
+        // xor term g_k * v_k to direction i
+        sobol_last_num_vec[j] ^= dir_vect[j];
+      }
+    }
+    gs = gs >> 1;
+  }
+  for( j = 0; j < sob_dim; j++ ) {
+    md_zd[j] = sobol_last_num_vec[j] * ro_scal->sob_norm_fact;
+  }
+}
+#+end_src
+
+It's more complicated, but at least it doesn't look like it's using
+uninitialized values of ~sobol_last_num_vec~. It still seems like it should be
+possible to avoid that extra allocation of ~md_zd~.
