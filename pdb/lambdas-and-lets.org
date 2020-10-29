@@ -23,7 +23,7 @@ get my toes wet. However, the big deal this time around is obviously the lambdas
 and let-bindings. Therefore, I'll use this post to describe how I
 implemented everything in Rust. While type inference was a big part of this
 endeavour, I won't spend too much time on it, as I've already covered HM-style
-inference in [[file:~/src/munksgaard.me/toyml/typechecker.org::+TITLE: Typechecking toyml][this old post]]. I did get some new inspiration from [[https://www.cl.cam.ac.uk/teaching/1415/L28/type-inference.pdf][these lecture
+inference in [[file:~/src/munksgaard.me/toyml/typechecker.org][this old post]]. I did get some new inspiration from [[https://www.cl.cam.ac.uk/teaching/1415/L28/type-inference.pdf][these lecture
 notes]], but in the end, things turned out pretty much like in toyml.
 
 * Parsing function application

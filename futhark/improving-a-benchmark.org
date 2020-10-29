@@ -126,7 +126,7 @@ and then dump the OpenCL kernel using
 
 The main bit of code that we're interested in looks like this:
 
-#+BEGIN_SRC opencl
+#+BEGIN_SRC c
   for (int32_t j_5811 = 0; j_5811 < b_5471; j_5811++) {
     float sum_5812;
     float sum_5813 = 0.0F;
@@ -210,57 +210,57 @@ In all, the resulting function is semantically equivalent to the previous one,
 but we're hoping that this new function is able to take advantage of intra-group
 parallelism. So, what does the generated kernel look like?
 
-#+BEGIN_SRC opencl
-for (int32_t im1_5761 = 0; im1_5761 < upper_bound_5640; im1_5761++) {
-    int32_t i_5762 = 1 + im1_5761;
+#+BEGIN_SRC c
+  for (int32_t im1_5761 = 0; im1_5761 < upper_bound_5640; im1_5761++) {
+      int32_t i_5762 = 1 + im1_5761;
 
-    ((__local float *) double_buffer_mem_6291)[local_tid_6341] = ((__global
-                                                                       float *) mem_6187)[local_tid_6341];
-    barrier(CLK_LOCAL_MEM_FENCE);
-    for (int32_t j_5765 = 0; j_5765 < i_5762; j_5765++) {
-       float x_5767 = ((__global float *) diag_mem_6183)[i_5762 * b_5613 +
-                                                              j_5765];
-       int32_t gtid_5680 = local_tid_6341;
-       int32_t phys_tid_5681;
+      ((__local float *) double_buffer_mem_6291)[local_tid_6341] = ((__global
+                                                                         float *) mem_6187)[local_tid_6341];
+      barrier(CLK_LOCAL_MEM_FENCE);
+      for (int32_t j_5765 = 0; j_5765 < i_5762; j_5765++) {
+         float x_5767 = ((__global float *) diag_mem_6183)[i_5762 * b_5613 +
+                                                                j_5765];
+         int32_t gtid_5680 = local_tid_6341;
+         int32_t phys_tid_5681;
 
-       phys_tid_5681 = local_tid_6341;
-       if (slt32(gtid_5680, b_5612)) {
-           float x_5769 = ((__local
-                            float *) double_buffer_mem_6291)[gtid_5680];
-           float x_5770 = ((__local float *) mem_6197)[j_5765 * b_5612 +
-                                                       gtid_5680];
-           float y_5771 = x_5767 * x_5770;
-           float res_5772 = x_5769 + y_5771;
+         phys_tid_5681 = local_tid_6341;
+         if (slt32(gtid_5680, b_5612)) {
+             float x_5769 = ((__local
+                              float *) double_buffer_mem_6291)[gtid_5680];
+             float x_5770 = ((__local float *) mem_6197)[j_5765 * b_5612 +
+                                                         gtid_5680];
+             float y_5771 = x_5767 * x_5770;
+             float res_5772 = x_5769 + y_5771;
 
-           ((__local float *) mem_6206)[gtid_5680] = res_5772;
-       }
-       barrier(CLK_LOCAL_MEM_FENCE);
-       ((__local float *) double_buffer_mem_6291)[local_tid_6341] =
-           ((__local float *) mem_6206)[local_tid_6341];
-       barrier(CLK_LOCAL_MEM_FENCE);
-   }
+             ((__local float *) mem_6206)[gtid_5680] = res_5772;
+         }
+         barrier(CLK_LOCAL_MEM_FENCE);
+         ((__local float *) double_buffer_mem_6291)[local_tid_6341] =
+             ((__local float *) mem_6206)[local_tid_6341];
+         barrier(CLK_LOCAL_MEM_FENCE);
+     }
 
-   int32_t gtid_5686 = local_tid_6341;
-   int32_t phys_tid_5687;
+     int32_t gtid_5686 = local_tid_6341;
+     int32_t phys_tid_5687;
 
-   phys_tid_5687 = local_tid_6341;
-   if (slt32(gtid_5686, b_5612)) {
-       float x_5775 = ((__local float *) mem_6197)[i_5762 * b_5612 +
-                                                   gtid_5686];
-       float x_5776 = ((__local
-                        float *) double_buffer_mem_6291)[gtid_5686];
-       float res_5777 = x_5775 - x_5776;
+     phys_tid_5687 = local_tid_6341;
+     if (slt32(gtid_5686, b_5612)) {
+         float x_5775 = ((__local float *) mem_6197)[i_5762 * b_5612 +
+                                                     gtid_5686];
+         float x_5776 = ((__local
+                          float *) double_buffer_mem_6291)[gtid_5686];
+         float res_5777 = x_5775 - x_5776;
 
-       if ((sle32(0, i_5762) && slt32(i_5762, b_5612)) && (sle32(0,
-                                                                 gtid_5686) &&
-                                                           slt32(gtid_5686,
-                                                                 b_5612))) {
-           ((__local float *) mem_6197)[i_5762 * b_5612 + gtid_5686] =
-               res_5777;
-       }
-   }
-   barrier(CLK_LOCAL_MEM_FENCE);
-}
+         if ((sle32(0, i_5762) && slt32(i_5762, b_5612)) && (sle32(0,
+                                                                   gtid_5686) &&
+                                                             slt32(gtid_5686,
+                                                                   b_5612))) {
+             ((__local float *) mem_6197)[i_5762 * b_5612 + gtid_5686] =
+                 res_5777;
+         }
+     }
+     barrier(CLK_LOCAL_MEM_FENCE);
+  }
 #+END_SRC
 
 That's a big chunk of code, but essentially what is happing is what we want: the

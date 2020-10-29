@@ -18,7 +18,7 @@ language theory, algorithms, concurrency and parallelism.
 * pdb
  - [[file:pdb/lets-build-a-database.org][Let's build a database]]
  - [[file:pdb/create-insert-and-select.org][Create, Insert and Select]]
- - [[file:pdb/lambdas-and-lets.org::+TITLE: Lambdas and Lets - pdb part 2][Lambdas and Lets]]
+ - [[file:pdb/lambdas-and-lets.org][Lambdas and Lets]]
 
 * Random unfinished projects
 

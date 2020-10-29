@@ -34,7 +34,7 @@ We want to try to minimize the number of shared memory allocations in kernels.
 
 For instance, consider the following code snippet written in OpenCL:
 
-#+begin_src opencl
+#+begin_src c
   __kernel void
   lud_perimeter(__global float *m,
                 __local  float *peri_row,
@@ -70,7 +70,7 @@ For instance, consider the following code snippet written in OpenCL:
 Seeing that the uses ~peri_row~ and ~peri_col~ never overlap, it might be
 beneficial to instead generate something like the following:
 
-#+begin_src opencl
+#+begin_src c
   __kernel void
   lud_perimeter(__global float *m,
                 __local  float *peri,
