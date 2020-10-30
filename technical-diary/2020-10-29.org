@@ -1,0 +1,28 @@
+#+TITLE: 2020-10-29
+#+DATE: <2020-10-29 Thu>
+
+* DONE Proof-read the auto-tuning paper
+:LOGBOOK:
+CLOCK: [2020-10-29 Thu 11:00]--[2020-10-29 Thu 11:25] =>  0:25
+CLOCK: [2020-10-29 Thu 10:25]--[2020-10-29 Thu 10:50] =>  0:25
+CLOCK: [2020-10-29 Thu 09:54]--[2020-10-29 Thu 10:19] =>  0:25
+:END:
+
+* DONE Talk to Cosmin about the pseudo-code
+
+* DONE Find out which revisions of Futhark we should run auto-tuning benchmarks on
+:LOGBOOK:
+CLOCK: [2020-10-29 Thu 14:28]--[2020-10-29 Thu 14:53] =>  0:25
+CLOCK: [2020-10-29 Thu 11:50]--[2020-10-29 Thu 12:15] =>  0:25
+:END:
+
+The merge commit of the binary search tuner is
+1d0bb47517cce1c9cbee58f138647d9ab2e49193 and its master-branch parent is
+217a17308f91b4725d2ee0ef6ea6e0d40520ad35.
+
+However, we need also compare with the size-invariant tuner and the previous
+opentuner performance. I guess 217a17 is the size-invariant tuner, but how do we
+compare with the opentuner?
+
+The old opentuner-based autotuner is available here:
+https://github.com/diku-dk/futhark/blob/737763b148201774a659adb52ddbd53f3ac02e96/tools/futhark-autotune

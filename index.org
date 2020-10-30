@@ -36,6 +36,7 @@ language theory, algorithms, concurrency and parallelism.
 
 * Technical diary
 
+ - [[file:technical-diary/2020-10-29.org][2020-10-29]]
  - [[file:technical-diary/2020-10-07.org][2020-10-07]]
  - [[file:technical-diary/2020-09-21.org][2020-09-21]]
  - [[file:technical-diary/2020-09-18.org][2020-09-18]]
