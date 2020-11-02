@@ -1,0 +1,39 @@
+#+TITLE: 2020-10-30
+#+DATE: <2020-10-30 Fri>
+
+* TODO Figure out how to run futhark-autotune on 217a17
+:LOGBOOK:
+CLOCK: [2020-10-29 Thu 15:10]--[2020-10-29 Thu 15:35] =>  0:25
+:END:
+
+For the ppop paper, this is how they tuned their programs:
+
+#+begin_src
+FUTHARK_INCREMENTAL_FLATTENING=1 futhark/tools/futhark-autotune --futhark-bench=bin/futhark-bench --compiler=bin/futhark-opencl  --stop-after 2400  --test-limit 10000000 --bail-threshold=5000 benchmarks/OptionPricing.fut --save-json tunings/OptionPricing.json
+#+end_src
+
+But what are futhark-bench and futhark-opencl? It seems like they just
+correspond to ~futhark bench~ and ~futhark opencl~, respectively.
+
+It seems like they used their own ~benchmarks~ directory instead of
+futhark-benchmarks.
+
+* TODO Find out what benchmark programs and data-sets we should run auto-tuning benchmarks on
+
+
+* DONE Figure out what conference cosmin is thinking of submitting to
+:LOGBOOK:
+CLOCK: [2020-10-30 Fri 11:19]--[2020-10-30 Fri 11:44] =>  0:25
+CLOCK: [2020-10-30 Fri 10:47]--[2020-10-30 Fri 11:12] =>  0:25
+:END:
+
+And adapt our paper to their requirements. Also make note of the page count.
+
+This is it: http://tfp2021.org/
+
+#+begin_quote
+Draft papers and papers submitted for formal review are either submitted as
+extended abstracts (4 to 10 pages in length) or as full papers (20 pages).
+#+end_quote
+
+Here's the result: [[orgit-rev:~/src/futhark-papers/::88d821183465f7c3a0d7a9ab6e3faf071013d35f][~/src/futhark-papers/ (magit-rev 88d82118)]]
