@@ -1,0 +1,18 @@
+#+TITLE: 2020-11-02
+#+DATE: <2020-11-02 Mon>
+
+* TODO Figure out how to run futhark-autotune on 217a17
+:LOGBOOK:
+CLOCK: [2020-11-02 Mon 10:18]--[2020-11-02 Mon 10:43] =>  0:25
+CLOCK: [2020-11-02 Mon 09:42]--[2020-11-02 Mon 10:07] =>  0:25
+:END:
+
+Continued from [[file:2020-10-30.org::*Figure out how to run futhark-autotune on 217a17][2020-10-30]].
+
+
+
+* TODO Find out what benchmark programs and data-sets we should run auto-tuning benchmarks on
+
+Continued from [[file:2020-10-30.org::*Find out what benchmark programs and data-sets we should run auto-tuning benchmarks on][2020-10-30]].
+
+Add bfast, kd-trees, nw
