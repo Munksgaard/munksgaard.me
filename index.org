@@ -36,6 +36,7 @@ language theory, algorithms, concurrency and parallelism.
 
 * Technical diary
 
+ - [[file:technical-diary/2020-11-05.org][2020-11-05]]
  - [[file:technical-diary/2020-11-02.org][2020-11-02]]
  - [[file:technical-diary/2020-10-30.org][2020-10-30]]
  - [[file:technical-diary/2020-10-29.org][2020-10-29]]
@@ -94,3 +95,7 @@ language theory, algorithms, concurrency and parallelism.
 * Links
 
 https://github.com/Munksgaard/
+
+* Public Key
+
+[[file:publickey.txt][4CE62A90EFC0B9B2]]
