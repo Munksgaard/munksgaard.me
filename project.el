@@ -54,16 +54,16 @@
 
         '("munksgaard.me-static"
           :base-directory "./"
-          :base-extension "css\\|js\\|png\\|jpg\\|gif\\|mp3\\|ogg\\|patch"
+          :base-extension "css\\|js\\|png\\|jpg\\|gif\\|mp3\\|ogg\\|patch\\|txt"
           :recursive t
-          :publishing-directory "/ssh:munksgaard.me|sudo:www-data:/var/www/munksgaard.me"
+          :publishing-directory "/ssh:munksgaard.me|sudo:www-data@:/var/www/munksgaard.me"
           :publishing-function org-publish-attachment
           )
 
         '("papers"
           :base-directory "./papers/"
           :base-extension "pdf"
-          :publishing-directory "/ssh:munksgaard.me|sudo:www-data:/var/www/munksgaard.me/papers"
+          :publishing-directory "/ssh:munksgaard.me|sudo:www-data@:/var/www/munksgaard.me/papers"
           :publishing-function org-publish-attachment)
 
         '("munksgaard.me" :components ("munksgaard.me-org" "munksgaard.me-static" "papers"))))
