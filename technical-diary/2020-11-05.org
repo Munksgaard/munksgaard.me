@@ -3,12 +3,74 @@
 
 * Benchmarking and graphing the results
 
+I should really copy the code to my array20-paper repository and set up the
+right datasets.
+
+Two datasets for each benchmark? Sure.
+
+** TODO Get futhark benchmark results
+
+*** DONE LUD
+
+*** TODO BFast
+
+There is only one benchmark for regular bfast. There are two for bfast-cloudy,
+however. Should we just use that instead? And is there a hand-written benchmark
+we can compare to?
+
+*** DONE Heston
+
+*** DONE OptionPricing
+
+*** DONE BackProp
+
+*** DONE LavaMD
+
+*** DONE nw
+
+*** DONE nn
+
+Due to errors in the compiler in the specific version I'm using, this benchmark
+doesn't work.
+
+*** DONE SRAD
+
+Due to errors in the compiler in the specific version I'm using, this benchmark
+doesn't work.
+
+*** DONE Pathfinder
+
+Due to errors in the compiler in the specific version I'm using, this benchmark
+doesn't work.
+
+** TODO Get handwritten benchmark results
+
+*** TODO LUD
+
+*** TODO BFast
+
+*** TODO Heston
+
+*** TODO OptionPricing
+
+*** TODO BackProp
+
+*** TODO LavaMD
+
+*** TODO nw
+
+*** TODO nn
+
+*** TODO SRAD
+
+*** TODO Pathfinder
+
 * New GPG keys
 
 I've created a new GPG key for myself, here's the hash:
-[[file:~/src/munksgaard.me/publickey.txt][4CE62A90EFC0B9B2]]
+[[file:../publickey.txt][4CE62A90EFC0B9B2]]
 
-6A18A9D84FB4AE5173030E33648E19638AA008ED
+[[file:~/src/munksgaard.me/publickey.txt][file:~/src/munksgaard.me/publickey.txt]]
 
 It is set to expire in 2022, so [[https://www.g-loaded.eu/2010/11/01/change-expiration-date-gpg-key/][here]] is some information for myself on how to
 change the expiration date.

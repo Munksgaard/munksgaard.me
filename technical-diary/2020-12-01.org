@@ -1,0 +1,10 @@
+#+TITLE: 2020-12-01
+#+DATE: <2020-12-01 Tue>
+
+* Tridag
+
+Let's get back to work.
+
+The [[https://github.com/diku-dk/futhark-benchmarks/blob/master/finpar/LocVolCalib.fut][LocVolCalib]] benchmark has an interesting function: [[https://github.com/diku-dk/futhark-benchmarks/blob/master/finpar/LocVolCalib.fut#L60][tridagPar]]. It's described
+in detail in [[https://dl.acm.org/doi/pdf/10.1145/2898354][Section 4.3 of this paper]] but in essence it uses a sequence of
+~map~ and ~scan~ operations to compute some recurrences.

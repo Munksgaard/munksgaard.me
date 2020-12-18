@@ -1,0 +1,408 @@
+#+TITLE: 2020-12-18
+#+DATE: <2020-12-18 Fri>
+
+Long time no see... I'll try to get back in a habit of writing stuff down
+here. However, I am also aware that we're going into the holiday season,
+so... Let's just try our best, shall we?
+
+* Reordering statements
+
+In trying to tackle the [[file:2020-10-07.org::*Double-buffer problems][double-buffer problems]] I've previously described, I've
+been trying to write a pass that reorders statements in scopes/bodies to improve
+code locality. In essence, I want to be able to rewrite this:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let main () =
+    -- compute xs
+    let xs = ...
+    -- other stuff, not using xs
+    let ys = ...
+    -- copying xs and returning it
+    let xs' = copy xs
+    in (xs', ys)
+#+end_src
+
+Into this:
+
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let main () =
+    -- compute xs
+    let xs = ...
+    let xs' = copy xs
+    -- other stuff, not using xs
+    let ys = ...
+    in (xs', ys)
+#+end_src
+
+The theory is that this will enable some further optimizations by my
+ReuseAllocations pass, because the memory block for ~xs~ might be reused in the
+computation of ~ys~. So, I've been working on that, [[https://github.com/diku-dk/futhark/blob/44680580186de2a651dac11ce3d973029b1a7216/src/Futhark/Optimise/ReorderStatements.hs][here]] and [[https://github.com/diku-dk/futhark/blob/0d7bb8a02c7375ca0c637bdfa3f81c55ffb571c4/src/Futhark/Optimise/ReorderStatements.hs][here]]. The first one
+is the cleanest, but it doesn't handle memory blocks or statements that consume.
+
+However, as Troels had pointed out, my current approach does not handle aliased
+memory well. I found out when I inspected the reordered code for
+OptionPricing[fn:1]:
+
+#+begin_src diff
+--- original.kernel	2020-12-18 22:21:45.587014837 +0100
++++ reordered.kernel	2020-12-18 20:55:34.183619560 +0100
+@@ -481,6 +481,15 @@
+                 mapout_25496 with [i_25497] <- defunc_1_f_res_24862
+               in {lw_dest_25498}
+             }
++          -- double_buffer_array_25818 : [sobvctsz_24759]i32@@double_buffer_mem_25816->
++          -- {base: [sobvctsz_24759]; contiguous: True; LMADs: [{offset: 0i64;
++          --                                                     strides: [1i64];
++          --                                                     rotates: [0i64];
++          --                                                     shape: [sobvctsz_24759];
++          --                                                     permutation: [0];
++          --                                                     monotonicity: [Inc]}]}
++          let {[sobvctsz_24759]i32 double_buffer_array_25818} =
++            copy(defunc_1_map_res_24859)
+           -- result_25499 : [num_und_24695][num_dates_24697]f32@@mem_25623->
+           -- {base: [num_und_24695, num_dates_24697]; contiguous: True;
+           --  LMADs: [{offset: 0i64; strides: [num_dates_24697, 1i64]; rotates: [0i64, 0i64];
+@@ -1443,15 +1452,6 @@
+                 mapout_25520 with [i_25521] <- defunc_1_f_res_25325
+               in {lw_dest_25522}
+             }
+-          -- double_buffer_array_25818 : [sobvctsz_24759]i32@@double_buffer_mem_25816->
+-          -- {base: [sobvctsz_24759]; contiguous: True; LMADs: [{offset: 0i64;
+-          --                                                     strides: [1i64];
+-          --                                                     rotates: [0i64];
+-          --                                                     shape: [sobvctsz_24759];
+-          --                                                     permutation: [0];
+-          --                                                     monotonicity: [Inc]}]}
+-          let {[sobvctsz_24759]i32 double_buffer_array_25818} =
+-            copy(defunc_1_map_res_24859)
+           -- double_buffer_array_25819 : [num_models_24693]f32@@double_buffer_mem_25817->
+           -- {base: [num_models_24693]; contiguous: True; LMADs: [{offset: 0i64;
+           --                                                       strides: [1i64];
+#+end_src
+
+What we're seeing here is that the copy of ~defunc_1_map_res_24859~ into
+~double_buffer_array25818~ is all the way up to where ~defunc_1_map_res_24859~
+is computed. This should allow us to reuse the memory block
+~defunc_1_map_res_24859~ resides in for something else, and it is exactly what I
+set out to do. Unfortunately, I had missed the fact that
+~double_buffer_array_25818~ resides in ~double_buffer_mem_25816~, which is also
+used for ~inpacc_24824~, one of the loop variables that is used further down in
+the code.
+
+The problem is that both ~inpacc_24824~ and ~double_buffer_mem_25816~ resides in
+the same memory, but my current algorithm only looks at "consumes" and direct
+data dependencies (the computation of ~x~ uses ~y~, therefore ~y~ must be
+computed first).
+
+For completeness, I'll paste the log from our IRC chat here:
+
+#+begin_src
+
+<munksgaard> Athas: Jeg tror der er noget galt med min reordering
+<munksgaard> Eller
+<munksgaard> Jeg skal lige grave lidt mere.
+<munksgaard> concieggs: programmeringssprog
+<munksgaard> Athas: Jo, minsandten. Hvis jeg tager OptionPricing.fut, og det eneste jeg gør er at rykke double-buffer kopieringen af det første resultat op, så får jeg NaN i stedet for det rigtige resultat.
+<Athas>      munksgaard: Jeg sagde det jo!
+<munksgaard> Hvad går der galt?
+<Athas>      Når du flytter kopieringen op, så overskriver du en memory block der stadigvæk er i brug (men måske under et andet navn, hvis den blev returneret som resultat af løkkekroppen).
+<munksgaard> https://munksgaard.me/junk/reordered-just-double-buffer.sexp vs https://munksgaard.me/junk/original.sexp
+<munksgaard> (oversæt med `futhark dev --expand-allocations --compile-opencl original.sexp`)
+<munksgaard> Athas: Det forstår jeg ikke.
+<munksgaard> Eller... måske
+<Athas>      munksgaard: Du overskriver den hukommelse inpacc_24824 ligger i før du er færdig med at bruge inpacc_24824.
+<Athas>      Så der er ikke engang noget funky aliasing her.  Problemet er at du overser at når du bruger inpacc_24824, så bruger du også implicit double_buffer_mem_25816.
+<munksgaard> Ah ja, det kan jeg godt se.
+<munksgaard> Men det er jo noget rod... Jeg kan godt finde frem til at double_buffer_mem_25816 også referes til ved kopieringen, men det bliver bøvlet at finde ud af om den refereres andre steder...
+<munksgaard> Det er ikke en consume
+<Athas>      Når du bruger freeIn på stm Stm, så skal du bagefter løbe igennem alle de navne du finder, og for dem der henviser til et array, også tage hukommelsesblokken med.
+<munksgaard> Ja det giver mening. Men hvad hvis en af de stms også overskriver hukommelsen? Så er rækkefølgen ikke ligegyldig, eller hvad?
+<munksgaard> foo = xs@mem_1[...]; ys@mem_1 = copy ...; bar = ys@mem_1[...]; zs@mem_1 = copy ...;
+<Athas>      Hvad sker der her?
+<Athas>      Jeg tror du skal adskille kill- og gen-uses, ligesom med registerallokering.
+<munksgaard> Først læses der fra et array i mem_1, så kopieres der nyt data ind i samme hukommelses blok, dernæst læses igen, og til sidst kopieres der ind i samme hukommelsesblok igen. Hvis jeg er i gang med at kigge på sidste stm kan jeg godt afgøre at de andre stms bruger samme hukommelsesblok, og derfor skal ind først, men hvordan enforcer jeg rækkefølgen?
+<Athas>      At læse fra et array er ikke en destruktiv anvendelse af dens hukommelsesblok.
+<munksgaard> Nej, klart.
+<munksgaard> Men altså, så bliver det lige pludselig en del mere kompliceret, ikke?
+<munksgaard> Spørgsmålet er om det bedre kan betale sig at lade det ligge og så rykke videre til noget nogle af Cosmins andre idéer
+<Athas>      Jeg tror du skal skrive nogle ordningsregler for at det ikke bliver helt hat og briller.  F.eks: Hvis en Stm X bruger et array i en hukommelsesblok M, og Stm Y er senere end X i det oprindelige program og binder et array i hukommelsesblok M, så skal Y være efter X.
+<munksgaard> Så vidt jeg kunne se kan jeg, hvis den her reordering-teknik kommer til at virke, spare 1 allokering i OptionPricing.
+<munksgaard> Athas: Men det betyder vel at min nuværende metode til reordering ikke rigtig er gangbar?
+<Athas>      munksgaard: Du må selv afgøre hvad du tænker er bedst.  Jeg har svært ved at sige det.
+<Athas>      Jeg kan ikke huske hvad din nuværende metode er.
+<munksgaard> Det er vist nogenlunde ækvivalent med en dybde-først søgning af et afhængighedstræ. Jeg tror det bliver svært at modellere afhængigheder mellem gen/kill statements, men det kan være jeg lige skal prøve at tænke lidt over det inden jeg opgiver helt.
+<Athas>      Du kan også tilføje "falsk" consumption.  Det er måske den nemmeste måde at implementere det på.  Lad som om en Stm der laver et array i blok M også consumer alle eksisterende arrays i blok M.
+<munksgaard> Tja, det har du måske ret i.
+<Athas>      Det er i virkeligheden det der sker, men det er ikke udtrykt i vores typesystem.  Det kunne være vi skulle tilføje det med aliasing...
+<munksgaard> Så `let xs@mem_1 = copy(...)` consumer mem_1
+<Athas>      Nej, så får du problemer.
+<Athas>      Det consumer ethvert eksisterende array der bruger mem_1.
+<munksgaard> Åh
+<Athas>      Kun arrays kan consumes, ikke hukommelsesblokke.
+<munksgaard> Hvorfor ikke?
+<Athas>      Jeg er faktisk ret sikker på det er den rigtige måde at modellere det på.  På sigt burde vi også udtrykke det direkte i alias-repræsentationen, men det er ikke teknisk muligt lige nu.
+<Athas>      Det er bare sådan typesystemet er.
+<munksgaard> Okay
+<Athas>      Men tænk over det: Resultatet af en Update har samme hukommelsesblok som dets input, så hvis du consumede blokken ville du ikke kunne bruge resultatet.
+<munksgaard> Så hvis man har et array `xs@mem_1`, og der så senere er et statemet `let ys@mem_1 = ...` så bliver xs consumed.
+<Athas>      Ja.
+<Athas>      Hm.  Der er nok brug for lidt mere special-casing, for 'let ys@mem_1 = transpose xs' skal ikke consume 'xs'.
+<Athas>      Du bliver nok nødt til at lave en funktion der afgør hvilke Exps der er "destruktive".
+<Athas>      Men idéen er den samme.
+<Athas>      Måske skal reglen være at 'let ys@mem_1 = ...' consumer alle arrays i mem_1, *bortset* fra dem som 'ys' aliaser.
+<munksgaard> Så er man nok nødt til at lave analysen fra start mod slut, så man ikke løber ind i samme problem som jeg prøvede at beskrive før (givet `xs@mem_1`, så kommer der en `let ys@mem_1 = ...` og xs bliver consumet, så kommer der senere en `let zs@mem_1 = ...`, så er det vel kun ys og ikke xs der skal consumes)
+<Athas>      Går det galt hvis 'xs' consumes flere gange?
+<munksgaard> Med min nuværende algoritme kunne det godt, ja. For så ville `xs` indsættes i listen af værdier der skal beregnes, og det er ikke garanteret at det sker før beregningen af `ys`.
+<Athas>      Okay, det ville du så være nødt til at tage højde for.
+<Athas>      Men jeg tror idéen er den rigtige.
+<Athas>      Det er også bedre end at have to separate mekanismer til hukommelsesblokke og consumption.  Det er jo samme princip.
+<munksgaard> grunden til at `transpose` skal ikke consume xs, er vel at den kun rører ved index-funktionen, ikke?
+<munksgaard> Kan man generalisere ud fra det?
+<Athas>      Ja, jeg tror den aliasing-baserede regel jeg skrev ovenfor ville være nok.
+<munksgaard> Hvad er reglen for hvornår `ys` aliaser et andet array?
+<munksgaard> Hvordan beregnes det?
+<Athas>      Det beregnes af alias-analyse-passet.
+<munksgaard> Okay, den må jeg kigge på.
+<Athas>      Bruger du det ikke allerede?
+<Athas>      https://github.com/diku-dk/futhark/blob/67827ae2534d67f5cdfbb51f509a8656f0d76709/src/Futhark/Optimise/ReorderStatements.hs#L141
+<munksgaard> Athas: Jo jo, ville bare gerne forstå præcis hvornår noget aliaser noget andet. Lige nu bruger jeg den mest som en black-box
+<munksgaard> Athas: Okay, tak.
+<Athas>      Se Futhark.IR.Prop.Aliases.
+#+end_src
+
+Given a statement ~let x@mem = ...~, Troels' suggestion is to first determine if
+the statement writes to ~x~, and therefore ~mem~ by inspection. look through all
+the statements that haven't yet been inserted and find out if there are any free
+arrays that reside in the same memory block. Any such arrays should then be
+pushed to the stack before we can insert the current statement. We can do that
+by saying that any array that resides in the same memory is consumed by the
+statement in question. However, that is too simplistic: Some statements, like a
+transpose, do not actually change the underlying memory, and can therefore
+peacefully coexist. However, that is already encoded in the aliasing
+information. We can say that, given ~let ys@mem_1 = ... ~, that statement
+consumes all arrays in ~mem_1~, except those that ~ys~ aliases.
+
+There's another problem though: There may be several statements that are
+overwriting the same memory block, so we need to make sure that their ordering
+is preserved. For instance:
+
+#+begin_src
+let xs@mem_1 = ...
+let x = xs[0]
+let ys@mem_1 = ...
+let y = ys[0]
+let zs@mem_1 = ...
+#+end_src
+
+Assume that we're processing the last statement: We find that both ~xs~ and ~ys~
+are consumed by this statement, because they both reside in the same memory
+block. Therefore they are both added to the list of values to insert. If ~ys~ is
+then processed first, we find that ~xs~ and ~zs~ are consumed by it and now
+/they/ have to be processed first... That's not going to fly. I'm going to need
+to sleep on it.
+
+** Manually moving stuff around to prove a point
+
+Aha! If we manually move the copy down below the loop that's a bit further down,
+it seems to work!
+
+#+begin_src
+--- original.kernel	2020-12-18 22:21:45.587014837 +0100
++++ manual.kernel	2020-12-18 22:36:45.994915413 +0100
+@@ -868,6 +868,15 @@
+                 }
+               in {lw_dest_25502}
+             }
++          -- double_buffer_array_25818 : [sobvctsz_24759]i32@@double_buffer_mem_25816->
++          -- {base: [sobvctsz_24759]; contiguous: True; LMADs: [{offset: 0i64;
++          --                                                     strides: [1i64];
++          --                                                     rotates: [0i64];
++          --                                                     shape: [sobvctsz_24759];
++          --                                                     permutation: [0];
++          --                                                     monotonicity: [Inc]}]}
++          let {[sobvctsz_24759]i32 double_buffer_array_25818} =
++            copy(defunc_1_map_res_24859)
+           -- result_25507 : [num_models_24693]f32@@mem_25700->
+           -- {base: [num_models_24693]; contiguous: True; LMADs: [{offset: 0i64;
+           --                                                       strides: [1i64];
+@@ -1443,15 +1452,6 @@
+                 mapout_25520 with [i_25521] <- defunc_1_f_res_25325
+               in {lw_dest_25522}
+             }
+-          -- double_buffer_array_25818 : [sobvctsz_24759]i32@@double_buffer_mem_25816->
+-          -- {base: [sobvctsz_24759]; contiguous: True; LMADs: [{offset: 0i64;
+-          --                                                     strides: [1i64];
+-          --                                                     rotates: [0i64];
+-          --                                                     shape: [sobvctsz_24759];
+-          --                                                     permutation: [0];
+-          --                                                     monotonicity: [Inc]}]}
+-          let {[sobvctsz_24759]i32 double_buffer_array_25818} =
+-            copy(defunc_1_map_res_24859)
+           -- double_buffer_array_25819 : [num_models_24693]f32@@double_buffer_mem_25817->
+           -- {base: [num_models_24693]; contiguous: True; LMADs: [{offset: 0i64;
+           --                                                       strides: [1i64];
+
+#+end_src
+
+* Running out of registers(?) on NVIDIA OpenCL
+
+I was playing around with ~tridag~, a function from the LocVolCalib benchmark
+and ran into some weird issues when I converted it to f64 and applied my
+reuse-allocations pass.
+
+The code looks like this:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let tridagPar [n] (a:  [n]f64, b: [n]f64, c: [n]f64, y: [n]f64 ): *[n]f64 =
+  #[unsafe]
+  ----------------------------------------------------
+  -- Recurrence 1: b[i] = b[i] - a[i]*c[i-1]/b[i-1] --
+  --   solved by scan with 2x2 matrix mult operator --
+  ----------------------------------------------------
+  let b0   = b[0]
+  let mats = map  (\i ->
+                     if 0 < i
+                     then (b[i], 0.0-a[i]*c[i-1], 1.0, 0.0)
+                     else (1.0,  0.0,             0.0, 1.0))
+                  (iota n)
+  let scmt = scan (\(a0,a1,a2,a3) (b0,b1,b2,b3) ->
+                     let value = 1.0/(a0*b0)
+                     in ( (b0*a0 + b1*a2)*value,
+                          (b0*a1 + b1*a3)*value,
+                          (b2*a0 + b3*a2)*value,
+                          (b2*a1 + b3*a3)*value))
+                  (1.0,  0.0, 0.0, 1.0) mats
+  let b    = map (\(t0,t1,t2,t3) ->
+                    (t0*b0 + t1) / (t2*b0 + t3))
+                 scmt
+  ------------------------------------------------------
+  -- Recurrence 2: y[i] = y[i] - (a[i]/b[i-1])*y[i-1] --
+  --   solved by scan with linear func comp operator  --
+  ------------------------------------------------------
+  let y0   = y[0]
+  let lfuns= map  (\i  ->
+                     if 0 < i
+                     then (y[i], 0.0-a[i]/b[i-1])
+                     else (0.0,  1.0))
+                  (iota n)
+  let cfuns= scan (\(a: (f64,f64)) (b: (f64,f64)): (f64,f64)  ->
+                     let (a0,a1) = a
+                     let (b0,b1) = b
+                     in ( b0 + b1*a0, a1*b1 ))
+                  (0.0, 1.0) lfuns
+  let y    = map (\(tup: (f64,f64)): f64  ->
+                    let (a,b) = tup
+                    in a + b*y0)
+                 cfuns
+  ------------------------------------------------------
+  -- Recurrence 3: backward recurrence solved via     --
+  --             scan with linear func comp operator  --
+  ------------------------------------------------------
+  let yn   = y[n-1]/b[n-1]
+  let lfuns= map (\k  ->
+                    let i = n-k-1
+                    in  if   0 < k
+                        then (y[i]/b[i], 0.0-c[i]/b[i])
+                        else (0.0,       1.0))
+                 (iota n)
+  let cfuns= scan (\(a: (f64,f64)) (b: (f64,f64)): (f64,f64)  ->
+                     let (a0,a1) = a
+                     let (b0,b1) = b
+                     in (b0 + b1*a0, a1*b1))
+                  (0.0, 1.0) lfuns
+  let y    = map (\(tup: (f64,f64)): f64  ->
+                    let (a,b) = tup
+                    in a + b*yn)
+                 cfuns
+  let y    = map (\i -> y[n-i-1]) (iota n)
+  in y
+
+let main [m] [n] (as:  [m][n]f64) (bs: [m][n]f64) (cs: [m][n]f64) (ys: [m][n]f64): *[m][n]f64 =
+  map4 (\a b c y -> tridagPar (a, b, c, y)) as bs cs ys
+#+end_src
+
+And after compiling with my reuse-allocations branch[fn:2], I get the following error
+when I run it:
+
+#+begin_src
+$ futhark dataset -b -g [1][1024]f64 -g [1][1024]f64 -g [1][1024]f64 -g [1][1024]f64 | ./tridag64-reuse-allocations --build-option='-cl-nv-maxrregcount=128' -D  > /dev/null
+Using platform: NVIDIA CUDA
+Using device: GeForce RTX 2080 Ti
+Lockstep width: 32
+Default group size: 256
+Default number of groups: 272
+Creating OpenCL program...
+OpenCL compiler options: -DLOCKSTEP_WIDTH=32 -Dmainzisegmap_group_sizze_9431=256 -Dmainzisegmap_group_sizze_9490=256 -Dmainzisegmap_group_sizze_9570=256 -Dmainzisegmap_group_sizze_9624=256 -Dmainzisegmap_group_sizze_9778=256 -Dmainzisegmap_num_groups_9572=272 -Dmainzisegscan_group_sizze_9537=256 -Dmainzisegscan_group_sizze_9671=256 -Dmainzisegscan_group_sizze_9883=256 -Dmainzisegscan_num_groups_9539=272 -Dmainzisegscan_num_groups_9673=272 -Dmainzisegscan_num_groups_9885=272 -Dmainzisuff_intra_par_1=32 -cl-nv-maxrregcount=128
+Building OpenCL program...
+Created kernel main.scan_stage1_9543.
+Created kernel main.scan_stage1_9677.
+Created kernel main.scan_stage1_9889.
+Created kernel main.scan_stage2_9543.
+Created kernel main.scan_stage2_9677.
+Created kernel main.scan_stage2_9889.
+Created kernel main.scan_stage3_9543.
+Created kernel main.scan_stage3_9677.
+Created kernel main.scan_stage3_9889.
+Created kernel main.segmap_9428.
+Created kernel main.segmap_9487.
+Created kernel main.segmap_9568.
+Created kernel main.segmap_9621.
+Created kernel main.segmap_9775.
+Created kernel main.segmap_intragroup_8752.
+Allocating 8192 bytes for arr->mem in space 'device' (then allocated: 8192 bytes) (new peak).
+Actually allocating the desired block.
+Allocating 8192 bytes for arr->mem in space 'device' (then allocated: 16384 bytes) (new peak).
+Actually allocating the desired block.
+Allocating 8192 bytes for arr->mem in space 'device' (then allocated: 24576 bytes) (new peak).
+Actually allocating the desired block.
+Allocating 8192 bytes for arr->mem in space 'device' (then allocated: 32768 bytes) (new peak).
+Actually allocating the desired block.
+n: 1024, max_group_size: 1024
+Compared 32 <= 1024.
+bytes: 40960, local_memory_capacity: 49136, intra_suff_and_fits: true, private_mem_size: 0, local_mem_size: 1, workgroup_size: 256, dev_local_mem_size: 49152
+Allocating 8192 bytes for mem_10354 in space 'device' (then allocated: 40960 bytes) (new peak).
+Actually allocating the desired block.
+Launching main.segmap_intragroup_8752 with global work size [1024] and local work size [1024]; local memory parameters sum to 40960 bytes.
+local   mem: 41000
+private mem: 0
+./tridag64-reuse-allocations: tridag64-reuse-allocations.c:5793: OpenCL call
+  clEnqueueNDRangeKernel(ctx->opencl.queue, ctx->mainzisegmap_intragroup_8752, 1, ((void *)0), global_work_sizze_10807, local_work_sizze_10811, 0, ((void *)0), ctx->profiling_paused || !ctx->profiling ? ((void *)0) : opencl_get_event(&ctx->opencl, &ctx->mainzisegmap_intragroup_8752_runs, &ctx->mainzisegmap_intragroup_8752_total_runtime))
+failed with error code -5 (Out of resources)
+#+end_src
+
+What we see here is that we only need to allocate five shared arrays of 8192
+bytes each, totalling 40960 bytes. Some more bytes are needed for reasons I
+don't remember, but the total is 41000 bytes, which is well under the reported
+local memory capacity. However, the kernel crashes with an out of resources
+error. Troels thinks it might have to do with running out of registers, perhaps
+the NVIDIA OpenCL compiler does something wrong.
+
+However, his proposed fix of suppling the option
+~--build-option='-cl-nv-maxrregcount=128'~ to to the binary doesn't seem to
+work. On the other hand, adding an attribute of
+~__attribute__((reqd_work_group_size(1024, 1, 1)))~ (remember to update 1024 to
+the right number) /does/ seem to work.
+
+* Footnotes
+
+[fn:1] To produce the reordered kernel, first produce the reordered sexp:
+
+#+begin_src
+futhark dev --sexp --kernels -a -e --cse -e --double-buffer -e --reorder-statements futhark-benchmarks/finpar/OptionPricing.fut > reordered.sexp
+#+end_src
+
+Then manually remove the other changes, which are valid and compile with:
+
+#+begin_src
+futhark dev --expand-allocations --compile-opencl reordered.sexp
+#+end_src
+
+Finally, run it and verify that we get NaN instead of the correct result
+
+#+begin_src
+cat futhark-benchmarks/finpar/OptionPricing-data/medium.in | ./reordered
+#+end_src
+
+[fn:2] I also added some extra instrumentation by editing the generated C-file
+directly.

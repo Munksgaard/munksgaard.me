@@ -1,0 +1,68 @@
+#+TITLE: 2020-11-09
+#+DATE: <2020-11-09 Mon>
+
+* Benchmarks
+
+Status:
+
+ - I have run the benchmarks heston32, OptionPricing, backprop, lavaMD, nw and
+   lud on gpu04 and saved the results
+ - I can create a graph of the results
+ - It's not pretty, as the differences in performance are too small to notice.
+ - I still have to add bfast, but I need to know what datasets I should use.
+ - I should probably only have both invariant and variant tune results when
+   there's actually a difference, like in LUD.
+
+* Running on gpu03
+
+It seems like bfast does not run on gpu03?
+
+#+begin_src
+$ make
+mkdir -p results
+FUTHARK_INCREMENTAL_FLATTENING=1 bin/futhark bench \
+  --backend=opencl --no-tuning --json results/bfast-untuned.json benchmarks/bfast.fut
+Compiling benchmarks/bfast.fut...
+Reporting average runtime of 10 runs for each dataset.
+
+Results for benchmarks/bfast.fut:
+bfast-data/sahara.in:      74789μs (RSD: 0.025; min:  -1%; max:  +7%)
+mkdir -p tunings results
+FUTHARK_INCREMENTAL_FLATTENING=1 /usr/bin/time -f '%e' -o results/bfast-opentuner.tunetime \
+  ./futhark-autotune \
+  --futhark-bench="bin/futhark bench" \
+  --compiler="bin/futhark opencl" \
+  --stop-after 2400 \
+  --test-limit 10000000 \
+  --bail-threshold=5000 \
+  --save-json tunings/bfast-opentuner.json \
+  benchmarks/bfast.fut
+Compiling benchmarks/bfast.fut... Done.
+Extracting threshold parameters and values... Command 'bin/futhark bench benchmarks/bfast.fut --exclude-case=notune --backend=opencl --skip-compilation --pass-option=-L --runs=1 --json=/tmp/tmp5OTQE4' failed:
+
+make: *** [tunings/bfast-opentuner.json] Error 1
+
+$ bin/futhark bench benchmarks/bfast.fut --exclude-case=notune --backend=opencl --skip-compilation --pass-option=-L --runs=1
+Reporting average runtime of 1 runs for each dataset.
+
+Results for benchmarks/bfast.fut (using bfast.fut.tuning):
+bfast-data/sahara.in:
+benchmarks/bfast failed with error code 1 and output:
+Using platform: NVIDIA CUDA
+Using device: GeForce GTX 780 Ti
+Lockstep width: 32
+Default group size: 256
+Default number of groups: 60
+Compared main.suff_outer_par_5 <= 67968.
+Compared main.suff_intra_par_6 <= 57.
+Compared main.suff_outer_par_15 <= 543744.
+Compared main.suff_outer_par_16 <= 4349952.
+Compared main.suff_intra_par_12 <= 128.
+Compared main.suff_outer_par_10 <= 543744.
+Compared main.suff_outer_par_9 <= 543744.
+Compared main.suff_outer_par_8 <= 28138752.
+./benchmarks/bfast: benchmarks/bfast.c:6055: OpenCL call
+  opencl_alloc(&ctx->opencl, size, desc, &block->mem)
+failed with error code -4 (Memory object allocation failure)
+
+#+end_src
