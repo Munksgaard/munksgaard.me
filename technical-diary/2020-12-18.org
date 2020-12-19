@@ -384,6 +384,9 @@ work. On the other hand, adding an attribute of
 ~__attribute__((reqd_work_group_size(1024, 1, 1)))~ (remember to update 1024 to
 the right number) /does/ seem to work.
 
+Correction! ~-cl-nv-maxregcount=64~ and lower works, but not any higher. 64
+seems to be fastest.
+
 * Footnotes
 
 [fn:1] To produce the reordered kernel, first produce the reordered sexp:
