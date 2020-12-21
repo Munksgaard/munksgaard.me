@@ -179,7 +179,7 @@ pushed to the stack before we can insert the current statement. We can do that
 by saying that any array that resides in the same memory is consumed by the
 statement in question. However, that is too simplistic: Some statements, like a
 transpose, do not actually change the underlying memory, and can therefore
-peacefully coexist. However, that is already encoded in the aliasing
+peacefully coexist. Luckily, that is already encoded in the aliasing
 information. We can say that, given ~let ys@mem_1 = ... ~, that statement
 consumes all arrays in ~mem_1~, except those that ~ys~ aliases.
 
