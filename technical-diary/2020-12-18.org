@@ -180,7 +180,7 @@ by saying that any array that resides in the same memory is consumed by the
 statement in question. However, that is too simplistic: Some statements, like a
 transpose, do not actually change the underlying memory, and can therefore
 peacefully coexist. Luckily, that is already encoded in the aliasing
-information. We can say that, given ~let ys@mem_1 = ... ~, that statement
+information. We can say that, given ~let ys@mem_1 = ...~ that statement
 consumes all arrays in ~mem_1~, except those that ~ys~ aliases.
 
 There's another problem though: There may be several statements that are
