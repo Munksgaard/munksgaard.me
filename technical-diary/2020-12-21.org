@@ -1,0 +1,197 @@
+#+TITLE: 2020-12-21
+#+DATE: <2020-12-21 Mon>
+
+* Reordering statements
+
+Carrying off from [[file:2020-12-18.org::*Reordering statements][Friday]], I need to find an algorithm for reordering statements
+that both handles memory blocks correctly and respects the original ordering of
+consumes/aliases.
+
+In essence, there are two problems we need to solve:
+
+ 1. The copy to the double buffer in OptionPricing should not be moved up before
+    the last use of inpacc. Troels' suggestion for "consuming" all arrays in the
+    same memory block (except those being aliased), should help with this
+    problem.
+ 2. The /ordering/ of these consumes and the destructive uses of memory blocks
+    should not change.
+
+As mentioned, the first point should handled by Troels' suggestion, but how do
+we combine that with the second point? In essence, the second point is about
+making sure that:
+
+#+begin_src
+  let xs@mem_1 = ...
+  let x = xs[...]
+  let ys@mem_1 = ...
+  let y = ys[...]
+  let zs@mem_1 = ...
+  let z = zs[...]
+#+end_src
+
+doesn't turn into
+
+#+begin_src
+  let ys@mem_1 = ...
+  let y = ys[...]
+  let xs@mem_1 = ...
+  let x = xs[...]
+  let zs@mem_1 = ...
+  let z = zs[...]
+#+end_src
+
+By the heuristic Troels suggested, when processing ~let zs@mem_1 = ...~, we will
+consume both ~ys~ and ~xs~, but perhaps the definition of ~ys~ can depend on
+~mem_1~ containing ~xs~, without there being a direct dependency? Perhaps, not?
+
+The problem arises in the OptionPricing example because the result of the loop
+body is written to the same memory block as the loop variable. The computation
+of whatever is written into the double buffer depends on ~inpacc~, but because
+the memory block isn't part of the type, there is no direct dependency between
+the ~inpacc~ and the double buffer. Can this ever happen for more than two
+arrays?
+
+So it needs to be the case that there is a loop variable, and a double buffer
+that is written to the same result. Then, inside, there's a third array ~xs~,
+which resides in the same memory block /without/ depending (in the type system)
+on ~inpacc~ or the double buffer array depending on it.
+
+When can it actually happen that some arrays reside in the same memory block
+without there being any dependency between them? In loops, because the loop body
+result has to be in the same memory location as the loop variable. In functions?
+No. In a map? Yes, but then they are either...
+
+Okay, here's the problem from OptionPricing:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  loop (inpacc@mem_1, x) for i < N do
+  let mem_2 = alloc(...)
+  let res@mem_2 = scan (+) 0 inpacc
+  let mem_3 = alloc(...)
+  let tmp = map2 (+) res inpacc
+  let x' = reduce (+) x tmp
+  let double_buffer@mem_1 = copy(res)                                 -- ref:copy
+  in (double_buffer, x')
+#+end_src
+
+Without looking at the memory blocks, we might be tempted to move the copy into
+~double_buffer~ up right after the scan. That would allow us to reuse ~mem_2~
+for the computation of ~tmp~ instead of allocating a new memory block
+~mem_3~. However, that's not allowed, so when we're processing line [[(copy)]], we
+notice that ~inpacc~ resides in the same memory block as ~double_buffer~, namely
+~mem_1~, and so we insert a consume of ~inpacc~, which forces the computation of
+~tmp~ and ~x'~ before we can perform the copy.
+
+As an aside, can we easily model this in actual Futhark?
+
+Yes, the following code has that pattern:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let main [n] (xss: [][n]i64, x: i64) =
+  #[incremental_flattening(only_intra)]
+  map (\xs -> loop (xs, x) for i < n do
+              let res = scan (*) 1 (map (* 42) xs)
+              let tmp = scan (*) 1 (map (+ 1) xs)
+              let tmp' = scan (+) 0 (map2 (+) tmp xs)
+              in (res, tmp'[0]))
+  xss
+#+end_src
+
+Turns into (inside the loop):
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  loop {*[n_5379]i64 xs_5588,
+        i64 x_5589} = {x_linear_double_buffer_copy_6223, x_5382}
+  for i_5587:i64 < n_5379 do {
+    -- resarr0_5595 : [n_5379]i64@@mem_6191->
+    -- {base: [n_5379]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+    --                                             rotates: [0i64]; shape: [n_5379];
+    --                                             permutation: [0];
+    --                                             monotonicity: [Inc]}]}
+    let {[n_5379]i64 resarr0_5595} =
+      segscan_thread
+      (#groups=impl₀_5380; groupsize=n_5379)
+      ({{1i64},
+        [],
+        fn {i64} (i64 x_5596, i64 x_5597) =>
+          let {i64 defunc_1_op_res_5598} = mul64(x_5596, x_5597)
+          in {defunc_1_op_res_5598}})
+      (gtid_5444 < n_5379) (~phys_tid_5445) : {i64} {
+        let {i64 x_5599} = xs_5588[gtid_5444]
+        let {i64 defunc_0_f_res_5600} = mul64(42i64, x_5599)
+        return {returns defunc_0_f_res_5600}
+      }
+    -- resarr0_5606 : [n_5379]i64@@mem_6194->
+    -- {base: [n_5379]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+    --                                             rotates: [0i64]; shape: [n_5379];
+    --                                             permutation: [0];
+    --                                             monotonicity: [Inc]}]}
+    -- res_5607 : [n_5379]i64@@mem_6196->
+    -- {base: [n_5379]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+    --                                             rotates: [0i64]; shape: [n_5379];
+    --                                             permutation: [0];
+    --                                             monotonicity: [Inc]}]}
+    let {[n_5379]i64 resarr0_5606, [n_5379]i64 res_5607} =
+      segscan_thread
+      (#groups=impl₀_5380; groupsize=n_5379)
+      ({{1i64},
+        [],
+        fn {i64} (i64 x_5608, i64 x_5609) =>
+          let {i64 defunc_1_op_res_5610} = mul64(x_5608, x_5609)
+          in {defunc_1_op_res_5610}})
+      (gtid_5446 < n_5379) (~phys_tid_5447) : {i64, i64} {
+        let {i64 x_5611} = resarr0_5595[gtid_5446]
+        let {i64 x_5612} = xs_5588[gtid_5446]
+        let {i64 defunc_0_f_res_5614} = add64(1i64, x_5612)
+        return {returns defunc_0_f_res_5614, returns x_5611}
+      }
+    -- resarr0_5618 : [n_5379]i64@@mem_6199->
+    -- {base: [n_5379]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+    --                                             rotates: [0i64]; shape: [n_5379];
+    --                                             permutation: [0];
+    --                                             monotonicity: [Inc]}]}
+    let {[n_5379]i64 resarr0_5618} =
+      segscan_thread
+      (#groups=impl₀_5380; groupsize=n_5379)
+      ({{0i64},
+        [],
+        fn {i64} (i64 x_5619, i64 x_5620) =>
+          let {i64 defunc_1_op_res_5621} = add64(x_5619, x_5620)
+          in {defunc_1_op_res_5621}})
+      (gtid_5448 < n_5379) (~phys_tid_5449) : {i64} {
+        let {i64 x_5622} = resarr0_5606[gtid_5448]
+        let {i64 x_5623} = xs_5588[gtid_5448]
+        let {i64 defunc_1_f_res_5625} = add64(x_5622, x_5623)
+        return {returns defunc_1_f_res_5625}
+      }
+    let {i64 loopres_5637} = resarr0_5618[0i64]
+    -- double_buffer_array_6221 : [n_5379]i64@@double_buffer_mem_6220->
+    -- {base: [n_5379]; contiguous: True;
+    --  LMADs: [{offset: mul_nw64 (phys_tid_5454) (n_5379); strides: [1i64];
+    --           rotates: [0i64]; shape: [n_5379]; permutation: [0];
+    --           monotonicity: [Inc]}]}
+    let {[n_5379]i64 double_buffer_array_6221} = copy(res_5607)
+    in {double_buffer_array_6221, loopres_5637}
+  }
+#+end_src
+
+Notice that it looks like we should be able to move the copy of ~res_5607~ up
+before the last scan, but if we did so, we would overwrite the contents of
+~xs_5588~, which ~resarr0_5618~ depends on.
+
+Okay, I think that's enough for now. The next step is to implement Athas'
+suggestion and see if there are any programs that actually have more than two
+overlapping arrays, without any clear interdependencies.
+
+* Future work suggestion by Cosmin
+
+I'll write this down here, before I lose my notes:
+
+ - We want to optimize NW (Needleman-Wunsch).
+ - Read Cosmins paper [[http://hjemmesider.diku.dk/~zgh600/Publications/pldi102-oancea.pdf][Logical Inference Techniques for Loop
+   Parallelization]]. Only section 2 is relevant.
+ - The purpose is to get an idea about what the equations and abstractions are
+   for safe reuse of memory blocks. Cosmins paper is about something else, but
+   might serve as inspiration.
+ - The end product is a set of rules, equations, abstractions and/or types that
+   can help us reuse even more memory allocations.
