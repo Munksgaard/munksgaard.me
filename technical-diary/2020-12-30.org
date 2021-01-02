@@ -1,0 +1,221 @@
+#+TITLE: 2020-12-30
+#+DATE: <2020-12-30 Wed>
+
+* Reordering Statements
+
+** DONE Write down what I've been doing on ReorderStatements
+:LOGBOOK:
+CLOCK: [2020-12-30 Wed 09:21]--[2020-12-30 Wed 09:34] =>  0:13
+:END:
+
+As [[file:2020-12-21.org::*Reordering statements][discussed]] [[file:2020-12-18.org::*Reordering statements][previously]], it turns out that I needed some additional handling of
+aliases in my ReorderStatements pass. Essentially the declaration of some array
+~let xs@mem_1 = ...~ should /consume/ all other arrays located in the same
+memory block, ~mem_1~, except those aliased by ~xs~. Consuming those arrays
+would force their creation and use before the creation ~xs~ in the code,
+thereby preventing any overlapping use of the same memory block. Excepting
+aliases of ~xs~ allows cases where ~xs~ is a slice of a larger array that's
+still in use.
+
+It turns out that the provided alias-analysis is not quite good enough to handle
+all the relevant cases, however. For instance, in the case of splitting an array
+into two smaller arrays, ~let (xs@mem_1, ys@mem_1) = split
+i a@mem_1~, all three arrays reside in the same memory block and should be
+allowed to coexist, but ~xs~ will only alias ~a~ and not ~ys~. I therefore
+needed to extend the heuristics from above, such that given the creation of an
+array, ~let xs@mem_1 = ...~, ~xs~ consumes all arrays in the same memory block,
+except those aliased by ~xs~, or which share an alias with ~xs~.
+
+** DONE Clean up the code
+:LOGBOOK:
+CLOCK: [2020-12-30 Wed 11:12]--[2020-12-30 Wed 11:37] =>  0:25
+CLOCK: [2020-12-30 Wed 10:32]--[2020-12-30 Wed 10:57] =>  0:25
+:END:
+
+* ReuseAllocations and buildKDtree
+
+The [[https://github.com/diku-dk/futhark-benchmarks/blob/master/misc/knn-by-kdtree/buildKDtree.fut][buildKDtree]] benchmark has not worked with ReuseAllocations for a long
+time. I've been putting it off until yesterday, when I finally tried to figure
+out what was going wrong. In the end, I managed to produce this diff, which
+provokes the problem:
+
+#+begin_src diff
+--- kd-orig.kernel	2020-12-29 16:11:09.793305531 +0100
++++ kd.kernel	2020-12-29 16:08:35.359899656 +0100
+@@ -1201,6 +1201,7 @@
+       let {i64 binop_y_17635} = mul_nw64(8i64, nodes_this_lvl_14473)
+       let {i64 bytes_17634} = smax64(0i64, binop_y_17635)
+       let {i64 bytes_17637} = smax64(0i64, nodes_this_lvl_14473)
++      let {i64 maxSubHelper_17870} = umax64(bytes_17369, bytes_17380)
+       -- defunc_4_map_res_14760 : [nodes_this_lvl_14473][pts_per_node_at_lev_14477]i32@@defunc_4_map_res_mem_17775->
+       -- {base: [nodes_this_lvl_14473, pts_per_node_at_lev_14477]; contiguous: True;
+       --  LMADs: [{offset: 0i64; strides: [pts_per_node_at_lev_14477, 1i64];
+@@ -1266,6 +1267,8 @@
+             (#groups=num_groups_15733; groupsize=segmap_group_size_15732; virtualise)
+             (gtid_15601 < nodes_this_lvl_14473) (~phys_tid_15602) : {[pts_per_node_at_lev_14477]i32,
+                                                                      [pts_per_node_at_lev_14477]f32} {
++              let {mem color_17873} =
++                alloc(maxSubHelper_17870)
+               let {i32 x_15738} = defunc_1_map_res_14490[gtid_15601]
+               let {i64 dim_15739} = sext i32 x_15738 to i64
+               let {bool x_15740} = sle64(0i64, dim_15739)
+@@ -1703,7 +1706,7 @@
+                   --                                                                monotonicity: [Inc]}]}
+                   let {[pts_per_node_at_lev_14477]f32 smaller_replicate_15817} =
+                     copy(xs_15758)
+-                  -- smaller_replicate_15818 : [pts_per_node_at_lev_14477]i64@@mem_17487->
++                  -- smaller_replicate_15818 : [pts_per_node_at_lev_14477]i64@@color_17873->
+                   -- {base: [pts_per_node_at_lev_14477]; contiguous: True; LMADs: [{offset: 0i64;
+                   --                                                                strides: [1i64];
+                   --                                                                rotates: [0i64];
+@@ -1719,7 +1722,7 @@
+                   --                                                                shape: [pts_per_node_at_lev_14477];
+                   --                                                                permutation: [0];
+                   --                                                                monotonicity: [Inc]}]}
+-                  -- scatter_res_15820 : [pts_per_node_at_lev_14477]i64@@mem_17487->
++                  -- scatter_res_15820 : [pts_per_node_at_lev_14477]i64@@color_17873->
+                   -- {base: [pts_per_node_at_lev_14477]; contiguous: True; LMADs: [{offset: 0i64;
+                   --                                                                strides: [1i64];
+                   --                                                                rotates: [0i64];
+@@ -1736,7 +1739,7 @@
+                     --                                                                shape: [pts_per_node_at_lev_14477];
+                     --                                                                permutation: [0];
+                     --                                                                monotonicity: [Inc]}]}
+-                    -- write_out_17210 : *[pts_per_node_at_lev_14477]i64@@mem_17487->
++                    -- write_out_17210 : *[pts_per_node_at_lev_14477]i64@@color_17873->
+                     -- {base: [pts_per_node_at_lev_14477]; contiguous: True; LMADs: [{offset: 0i64;
+                     --                                                                strides: [1i64];
+                     --                                                                rotates: [0i64];
+@@ -1849,7 +1852,7 @@
+                             write_out_17209 with [defunc_1_f_res_15829:+1i64*1i64] <- write_iv_slice_17237
+                           in {write_out_inside_bounds_17222}
+                         }
+-                      -- write_out_17229 : [pts_per_node_at_lev_14477]i64@@mem_17487->
++                      -- write_out_17229 : [pts_per_node_at_lev_14477]i64@@color_17873->
+                       -- {base: [pts_per_node_at_lev_14477]; contiguous: True; LMADs: [{offset: 0i64;
+                       --                                                                strides: [1i64];
+                       --                                                                rotates: [0i64];
+@@ -1858,7 +1861,7 @@
+                       --                                                                monotonicity: [Inc]}]}
+                       let {[pts_per_node_at_lev_14477]i64 write_out_17229} =
+                         -- Consumes write_out_17210
+-                        -- Branch returns: {[pts_per_node_at_lev_14477]i64@(mem_17487->
++                        -- Branch returns: {[pts_per_node_at_lev_14477]i64@(color_17873->
+                         --                                                  {base: [pts_per_node_at_lev_14477];
+                         --                                                   contiguous: True;
+                         --                                                   LMADs: [{offset: 0i64;
+@@ -1876,7 +1879,7 @@
+                           --           shape: [1i64]; permutation: [0]; monotonicity: [Inc]}]}
+                           let {[1i64]i64 write_iv_slice_17238} =
+                             xs_15759[write_iter_17208:+1i64*1i64]
+-                          -- write_out_inside_bounds_17228 : [pts_per_node_at_lev_14477]i64@@mem_17487->
++                          -- write_out_inside_bounds_17228 : [pts_per_node_at_lev_14477]i64@@color_17873->
+                           -- {base: [pts_per_node_at_lev_14477]; contiguous: True; LMADs: [{offset: 0i64;
+                           --                                                                strides: [1i64];
+                           --                                                                rotates: [0i64];
+@@ -1925,7 +1928,7 @@
+                                                                           pts_per_node_at_lev_14477)
+               let {mem mem_17527} =
+                 alloc(bytes_17380)
+-              -- result_17231 : [pts_per_node_at_lev_14477]f32@@mem_17527->
++              -- result_17231 : [pts_per_node_at_lev_14477]f32@@color_17873->
+               -- {base: [pts_per_node_at_lev_14477]; contiguous: True; LMADs: [{offset: 0i64;
+               --                                                                strides: [1i64];
+               --                                                                rotates: [0i64];
+@@ -1941,7 +1944,7 @@
+               --                                                                shape: [pts_per_node_at_lev_14477];
+               --                                                                permutation: [0];
+               --                                                                monotonicity: [Inc]}]}
+-              -- defunc_0_f_res_15845 : [pts_per_node_at_lev_14477]f32@@mem_17527->
++              -- defunc_0_f_res_15845 : [pts_per_node_at_lev_14477]f32@@color_17873->
+               -- {base: [pts_per_node_at_lev_14477]; contiguous: True; LMADs: [{offset: 0i64;
+               --                                                                strides: [1i64];
+               --                                                                rotates: [0i64];
+@@ -1958,7 +1961,7 @@
+                 --                                                                shape: [pts_per_node_at_lev_14477];
+                 --                                                                permutation: [0];
+                 --                                                                monotonicity: [Inc]}]}
+-                -- mapout_17233 : *[pts_per_node_at_lev_14477]f32@@mem_17527->
++                -- mapout_17233 : *[pts_per_node_at_lev_14477]f32@@color_17873->
+                 -- {base: [pts_per_node_at_lev_14477]; contiguous: True; LMADs: [{offset: 0i64;
+                 --                                                                strides: [1i64];
+                 --                                                                rotates: [0i64];
+@@ -2023,7 +2026,7 @@
+                   --                                                                monotonicity: [Inc]}]}
+                   let {[1i64]f32 defunc_0_f_res_slice_17240} =
+                     defunc_1_map_res_15743[x_15846:+1i64*1i64]
+-                  -- lw_dest_17236 : [pts_per_node_at_lev_14477]f32@@mem_17527->
++                  -- lw_dest_17236 : [pts_per_node_at_lev_14477]f32@@color_17873->
+                   -- {base: [pts_per_node_at_lev_14477]; contiguous: True; LMADs: [{offset: 0i64;
+                   --                                                                strides: [1i64];
+                   --                                                                rotates: [0i64];
+#+end_src
+
+The ReuseAllocations pass see that ~mem_17527~ and ~mem_17487~ do not overlap,
+so it tries to merge them by creating ~color_17873~. By manual inspection, there
+doesn't seem to be any overlap of their use, so in principle this merge should
+be safe. However, when running the program, I get the following error:
+
+#+begin_src
+./kd: Index [4553097050987711920] out of bounds for array of shape [32768]
+#+end_src
+
+Clearly, something is wrong.
+
+Troels theorized that the problem is actually in the memory expansion pass:
+Because memory expansion interleaves the arrays, each successive element belongs
+to a different thread. If the element-sizes of the merged arrays differ (i64 vs.
+f32 in this case), one thread might start using the array as f32 while another
+is still using it as i64.
+
+Here is my chat with Troels:
+
+#+begin_src
+<munksgaard> Athas: Kan du gennemskue hvorfor det her program (buildKDtree.fut) fejler efter mit reuse-allocations pass? Original kode: https://pastebin.com/ZfsaYtEL diff: https://pastebin.com/rAQQuR3Z transformeret kode: https://pastebin.com/VEJspydx
+<munksgaard> Det er tydeligvis ikke sikkert at lave den reuse jeg laver, men jeg kan ikke gennemskue hvorfor
+<munksgaard> Jeg får en fejl hvor en array-indeksering er aaaaaaalt for stor
+<munksgaard> ./kd: Index [4553097050987711920] out of bounds for array of shape [32768]
+<Athas>      munksgaard: Hvad er diffen fra og til?
+<Athas>      Ah, jeg tror jeg forstår.  Du har bare ikke fjernet de sammensmeltede allokeringer endnu.
+<munksgaard> Korrekt
+<munksgaard> Jeg har simplificeret diffen så meget jeg kunne
+<munksgaard> Og jeg synes den ser rimelig tilforladelig ud.
+<munksgaard> Det hele foregår inde i en stor segmap_thread, og det ene array i den memory block bruges som resultat af hele segmappet. Kan det være det der går galt?
+<Athas>      Mit gæt er at det har noget at gøre med memory expansion.
+<Athas>      Det kan være der er en antagelse et sted som ikke fungerer når vi har arrays med forskellig størrelse i samme blok.
+<munksgaard> Ja, det kan du godt have ret i. Der er en masse andre allokeringer i programmet, men det der var den eneste hvor vi mergede memory blocks tilhørende arrays af forskellig størrelse (deraf den der maxSubHelper)
+<munksgaard> Noget med alignment, eller hvad?
+<Athas>      Nej, det er fordi memory expansion sammenfletter arrays i hukommelsen.  Dvs. først ligger der et element tilhørende tråd 0, så tråd 1, så tråd 2, osv.
+<Athas>      Men det fungerer kun hvis elementstørrelsen er den samme på alle tidspunkter.
+<Athas>      Hvis tråd 0 pludselig skifter fra at gemme f32 til at gemme f64, så overskriver den jo tråd 1's element.
+<Athas>      Løsningen er enten at ændre memory block merging så DefaultSpace-blokke allokeret *i* kerner er inkompatible hvis de lagrer arrays med forskellig elementstørrelse, eller at ændre memory expansion så den kan håndtere dette tilfælde.  Jeg hælder mest til det førstnævnte, for sidstnævnte vil føre til fundamentalt mindre effektive
+<Athas>      hukommelsesadgangsmønstre, tror jeg.
+<Athas>      Men vi skal nok snakke med Cosmin og høre hvad han mener.
+#+end_src
+
+** DONE Meeting with Troels and Cosmin
+
+*** buildKDtree
+
+After meeting with Cosmin and Troels, we did indeed decide that the
+reuse-allocations pass should only merge memory blocks from arrays with the same
+/element size/, but only if the allocations are in `DefaultSpace`. The easiest
+way to do this is probably to insert interference edges between memory blocks
+corresponding to different element sizes in the interference algorithm. We'll
+probably need another pass to gather the element sizes of each memory block.
+
+*** OptionPricing
+
+We also spent a fair bit of time investigating the OptionPricing benchmark.
+
+The hand-written code seems to have 5 shared memory allocations, the original
+futhark one has 11 and the optimised one (after ReuseAllocations) has 8. We need
+to figure out where the additional three are coming from. It might be that two
+of them are necessary (for now) because of double-buffering, so we talked about
+designing a pass that would be able to identify unnecessary double-buffering and
+remove it after the fact. I also need to figure out where the last allocation is
+coming from.
+
+* DONE Read Cosmins paper
+
+As suggested [[file:2020-12-21.org::*Reordering statements][here]].
