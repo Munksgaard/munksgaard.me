@@ -1,0 +1,50 @@
+#+TITLE: 2021-01-08
+#+DATE: <2021-01-08 Fri>
+
+* Removing the ~ReorderStatements~ pass
+
+This is a copy-pase of the commit message from
+[[https://github.com/diku-dk/futhark/commit/61badb32562e0e7fd64464cc0dffadcebf6cc76b][61badb32562e0e7fd64464cc0dffadcebf6cc76b]].
+
+The purpose of the ~ReorderStatements~ pass was to improve locality of code the
+futhark IR. The motivating problem was some double buffers in ~OptionPricing~
+which would only be copied to at the very end of the program. This lead to some
+arrays being in-use for much longer than needed, preventing the reuse of their
+memory blocks. More details here:
+https://munksgaard.me/technical-diary/2020-10-07.html#orgbbfe6a7
+
+Unfortunately, I have not seen any actual benefits from introducing this
+pass. In the ~OptionPricing~ benchmark specifically, it turned out that moving
+final double-buffer copy up did not yield any additional opportunities for
+memory block merging. And in fact, some benchmarks actually use _more_ memory
+after having been reordered, because of the simplistic way this pass is
+implemented. As an example, consider the following code:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let map_res@ext_mem = ...
+let res_mem = alloc ...
+let res@res_mem = copy(map_res)
+in (res_mem, res)
+#+end_src
+
+The ~ReorderStatements~ algorithm would start by looking at the result of the
+body, ~(res_mem, res)~ and determine that both would need to be
+computed. Because it does not know the difference between a memory block and an
+array it arbitrarily decides to compute ~res_mem~ first, resulting in the
+following reordered code:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let res_mem = alloc ...
+let map_res@ext_mem = ...
+let res@res_mem = copy(map_res)
+in (res_mem, res)
+#+end_src
+
+But now there's no opportunity to merge res_mem with ext_mem, because their
+lifetimes overlap.
+
+I'm afraid overcoming this problem would require a significant rewrite of
+~ReorderStatements~, and I'm not even sure we'd get any performance benefits out
+of it.
+
+Therefore, I'm removing the pass for now. We can always dig it up again later.

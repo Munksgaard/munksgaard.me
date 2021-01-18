@@ -1,0 +1,61 @@
+#+TITLE: 2021-01-11
+#+DATE: <2021-01-11 Mon>
+
+* Cosmins paper (finally)
+
+USR - Uniform Set Representation
+
+Verify independence of loop memory references using an equation $S=Ø$. $S$ is a
+set expression, representing array indexes.
+
+Summarize accesses into:
+
+ - Read-Only (RO)
+ - Write-First (WF)
+ - Read-Write (RW)
+
+The sets contain array indices as LMADs
+
+Bottom-up parse of call and control dependency graphs (CDG) of program in SSA
+(Static Single Assignment) representation.
+
+* Also Kenneths paper
+
+* And status
+
+* NW and the copy optimization
+
+Maybe we can always reuse the input array in a map for the output array (if the
+element size is correct), if we perform an initial copy of the input array and
+replace all instances of it inside the map. I guess we also have to make sure
+that there are no later uses of the map.
+
+Then, we could leave it up to the simplifier to remove that copy if it is
+unnecessary.
+
+This reminds me of this conversation with Troels:
+
+#+begin_src
+<munksgaard>	Athas: i nw, hvordan kan det være at resultatet bliver kopieret ind i et nyt array? Burde vi ikke kunne bruge en af input-arraysne, da de er unikke?
+<Athas>	munksgaard: Jo, men vi har aldrig fået implementeret den optimering.
+<Athas>	Jeg tænker, at det er noget dit pass kan gøre.
+<munksgaard>	Ja, det burde det nok være...
+<Athas>	Er det ikke ret trivielt for dig?  Du skal bare tilføje funktionsparameter-hukommelsesblokke til din datastruktur, og de blokke der *ikke* hører til unikke arrays skal du opfatte som levende ved funktionsafslutning.
+<munksgaard>	Tjooo
+<munksgaard>	Lige nu laver jeg dog nye allokeringer i stedet for at genbruge de gamle. Jeg er ikke sikker på det ville spille så godt sammen med funktionsparameter-hukommelsesblokke
+<munksgaard>	Men det er muligt at jeg kan gøre det på en anden måde hvor jeg kan tage højde for funktionsparameter-hukommelsesblokke
+<Athas>	Nej, der er selvfølgelig den begrænsning at størrelsen er givet...
+<Athas>	Men jeg tror stadigvæk det kan håndteres rimeligt elegant.
+<munksgaard>	Jeg tænker mere på at, givet `mem1` (en funktionsparameter-hukommelsesblok) og `mem2` (en hukommelsesblok allokeret inde i funktionen), vil koden, med dit forslag sige: "ah, mem1 og mem2 overlapper ikke, så vi kan merge dem. Det gør jeg ved at indsætte en `alloc mem3 = ...` i toppen af kroppen og erstatte alle referencer til mem1 og mem2 med mem3
+<munksgaard>	Det spiller ikke rigtig hvis mem1 kommer fra udenfor kroppen
+<Athas>	Du kan have et specialtilfælde hvis den ene af dem er en funktionsparameter, hvor du bare omdøber det parameter.
+<munksgaard>	Ja, det kunne man. Men så skal man måske også håndtere at man prøver at merge to funktionsparametre?
+<Athas>	De skal være i konflikt med hinanden.
+<munksgaard>	Ja, selvfølgelig.
+<Athas>	Du kan udtrykke ret mange ting med konflikt-kanter.
+<munksgaard>	Ja, det er i virkeligheden ganske lækkert.
+<Athas>	Du kan også udtrykke at ethvert array er i konflikt med et funktionsparameter, med mindre de har præcist samme størrelse.
+<Athas>	Hvis vi senere tilføjer bedre størrelsesanalyse kan det så raffineres til "ikke større end funktionsparameteren".
+<munksgaard>	Jeg er lidt ked af at jeg stadig laver noget manuel håndtering af Spaces i GreedyColoring, men det er delvis fordi farvningen skal returnere et Space sammen med de mergede blokke.
+<munksgaard>	Det kunne man dog godt lave om på, ved bare at indsætte kanter mellem blokke fra forskellige spaces, og så slå spacet på hver merget blok op efter farvningen er foretaget.
+#+end_src
