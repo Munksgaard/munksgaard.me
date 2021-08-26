@@ -1,0 +1,66 @@
+#+TITLE: 2021-01-18
+#+DATE: <2021-01-18 Mon>
+
+* TODO Read up on NW
+
+Describe what it does.
+
+Describe any opportunities for memory level optimizations.
+
+* LUD
+
+We're interested in figuring out how to reduce memory usage in LUD. Consider, as
+an example, [[https://github.com/diku-dk/futhark-benchmarks/blob/fd706d9b79ef80ce9a633274873e47de228ac76f/rodinia/lud/lud.fut#L57-L67][~lud_perimeter_upper~]].
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let lud_perimeter_upper [m][b] (diag: [b][b]f32, a0s: [m][b][b]f32): *[m][b][b]f32 =
+      let a1s = map transpose a0s in
+      let a2s =
+          map  (\a1: [b][b]f32 ->
+                map  (\row0: [b]f32 ->                     -- ref:upper-inner-map
+                      loop row = copy row0 for i < b do
+                      let sum = (loop sum=0.0f32 for k < i do sum + diag[i,k] * row[k])
+                      let row[i] = row[i] - sum
+                      in  row
+                     ) a1
+               ) a1s
+      in map transpose a2s
+#+end_src
+
+We can ignore the two transposes for now. The inner map (starting on line
+[[(upper-inner-map)]]) processes each of the innermost dimensions in a
+three-dimensional array: Each element of the row is processed in sequence, by
+multiplying all the updated earlier elements with the row elements of
+~diag~. Interestingly, this could be done entirely in-place, because updating
+element $k$ of ~row~ only depends on updated elements with index less than $k$.
+
+The question is, how can we teach Futhark to recognize a pattern such as this,
+and optimise it to do the updates in-place?
+
+Inspired by [[http://hjemmesider.diku.dk/~zgh600/Publications/pldi102-oancea.pdf][Cosmins paper]], it would be interesting to summarize the
+index-function accesses of that code in order to see if we can determine a
+pattern.
+
+RO = row[k] k < i
+RW = row[i]
+
+RW = row[i]
+
+* TODO Write memory stuff
+
+* PoPL is today
+
+1430: Think Abstractly, Work Concretely
+https://app.clowdr.org/conference/popl2021/item/21fa6ac1-408d-4828-a44e-bd6c4daa491b
+
+1500: Julia Lawall
+https://app.clowdr.org/conference/popl2021/item/8d2cc458-4088-4527-8653-2feb66382331
+
+1600: PLMW
+https://app.clowdr.org/conference/popl2021/item/9f916e18-8994-4c6c-a71a-878c413165c6
+
+1630: PLMW
+https://app.clowdr.org/conference/popl2021/item/3a853c70-e6ef-4701-8108-d14c323a992e
+
+1600: AD
+https://app.clowdr.org/conference/popl2021/item/b5f0dc2c-cc04-469a-9c2a-6c4c8cb2c2ba

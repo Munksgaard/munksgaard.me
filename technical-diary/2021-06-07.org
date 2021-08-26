@@ -1,0 +1,122 @@
+#+TITLE: 2021-06-07
+#+DATE: <2021-06-07 Mon>
+
+* Status
+
+I have a few projects in the making at the moment:
+
+ 1. Reproduce BFAST speedup as a result of ReuseAllocations on the new A100.
+ 2. Implement slice-arrays in the core language
+ 3. Write about ReuseAllocations for the paper
+ 4. ICFP artifact review (two papers)
+
+Let's talk about them in turn.
+
+** Reproduce BFAST speedup on A100
+
+I first need to understand and describe why ReuseAllocations speeds up BFAST on
+phi, but not gpu04. To describe that, I first need to describe the
+memory characteristics of the two platforms.
+
+Let's make a table, and perhaps some index-cards with that information on, so I
+can remember it?
+
+Here's a good reference and walkthrough of the different NVIDIA GPUs:
+https://fabiensanglard.net/cuda/index.html
+
+| GPU         | Hostname            | Year | Architecture | SMs | Cores/SM |
+|-------------+---------------------+------+--------------+-----+----------|
+| GTX 780 Ti  | gpu01, gpu02, gpu03 | 2013 | Kepler       |  15 |      192 |
+| Tesla K40c  | phi                 | 2013 | Kepler       |  15 |      192 |
+| RTX 2080 Ti | gpu04               | 2018 | Turing       |  68 |       64 |
+| A100        | hpa01               | 2020 | Ampere       | 108 |       64 |
+
+The Tesla has support for double precision math, but the RTX 2080 does not?
+
+*** TODO: Verify that
+
+*** Why does ReuseAllocations speed up BFAST on phi, but not on gpu04?
+
+In general, I have a reproduceability problem with my ReuseAllocations
+tests. The autotuner is not infallible, and will sometimes choose the incorrect
+code versions. Currently, we run the autotuner twice: Once for futhark-master
+and once for futhark-mem. The result is that we're testing the impact of
+ReuseAllocations /as well as/ the result of the autotuner.
+
+Ideally, we should only autotune once, and use the same tuning result for both
+tests. Is that fair? At least it should make the results more consistent. Right
+now, we're autotuning a lot, and it takes a long time.
+
+Does it really speed up BFAST? Preliminary tests show that no, it
+doesn't. Perhaps it was just a fluke?
+
+Cosmin said to use the profiler, investigate if the intra-group version is being
+used.
+
+It seems like...
+
+Oh god... bin/futhark-mem was not actually using the right futhark-mem commit...
+
+Well, that was fixed and we updated the binaries to the latest master so that
+the benchmark output would be nice.
+
+
+** Implement slice-arrays
+
+I've started this implementation by adding a ~DimArrs~ constructor to the
+~Slice~ datatype.
+
+Consider the following:
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+Update nm (DimArrs [arr_1, ..., arr_k]) se
+#+end_src
+
+Here, ~nm~ is the ~VName~ of an array of ~k~ dimensions. For each dimension,
+there should be one array in the argument to ~DimArrs~, each array holding the
+indices for that dimension. The shape of arrays in ~DimArrs~ dictates the shape
+of the result.
+
+But wait, could the number of arrays be less than ~k~? I guess? That would be
+the same as taking all of that dimension. Also, why is ~DimArrs~ not a part of
+~DimIndex~? That would simplify things a lot, right?
+
+What would it mean to have eg. ~DimIndices [DimArr s0, DimFix i, DimSlice start
+num stride]~? I don't see any reason why that shouldn't be allowed in the core
+language, though it may not be representable in the source language. In the
+source language, though perhaps it should be?
+
+I think I should try to replace ~DimArrs~ in ~Slice~ with ~DimArr~ in
+~DimIndex~.
+
+The problem (that I never got around to explaining) remains, however: How do we
+implement some of the helper functions, like ~sliceSlice~ in the face of
+~DimArr~?
+
+** Write about ReuseAllocations
+
+** ICFP artifact review
+
+* Side-track: The GPU on phi
+
+The GPU on phi-diku-apl (a Tesla K40c) didn't work properly. It turned out that
+many of the NVIDIA kernel modules were not properly installed. ~lsmod | grep
+nvidia~ only returned a single module named ~nvidia~. To fix it, I ran the
+following commands:
+
+#+begin_src
+sudo yum reinstall kmod-nvidia-latest-dkms
+sudo nvidia-modprobe -u
+#+end_src
+
+Now, the modules are installed and loaded:
+
+#+begin_src
+$ lsmod | grep nvidia
+nvidia_drm             48984  0
+nvidia_modeset       1221700  1 nvidia_drm
+nvidia_uvm            983556  0
+nvidia              33992148  2 nvidia_modeset,nvidia_uvm
+drm_kms_helper        186531  2 mgag200,nvidia_drm
+drm                   456166  5 ttm,drm_kms_helper,mgag200,nvidia_drm
+#+end_src

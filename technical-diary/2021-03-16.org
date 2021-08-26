@@ -1,0 +1,6 @@
+#+TITLE: 2021-03-16
+#+DATE: <2021-03-16 Tue>
+
+* NW
+
+Let's take (another) look at the [[https://github.com/diku-dk/futhark-benchmarks/blob/master/rodinia/nw/nw.fut][nw benchmark]].

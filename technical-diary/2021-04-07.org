@@ -1,0 +1,6 @@
+#+TITLE: 2021-04-07
+#+DATE: <2021-04-07 Wed>
+
+* Yesterday, and the plan for today
+
+Tomorrow: Use stmInPlaceUpdates to simulate bindage.

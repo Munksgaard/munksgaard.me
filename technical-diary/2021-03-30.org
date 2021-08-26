@@ -1,0 +1,344 @@
+#+TITLE: 2021-03-30
+#+DATE: <2021-03-30 Tue>
+
+* Memory block coalescing
+:LOGBOOK:
+CLOCK: [2021-04-04 Sun 14:52]
+:END:
+
+
+Let's start with a simple example:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let a@a_mem = copy(b)
+#+end_src
+
+When is this safe?
+
+ 1. ~b~ is last-used, and any aliases of ~b~ have already been last-used.
+ 2. The creation of ~a_mem~ dominates ~b~ and any aliases of ~b~.
+ 3. ~a_mem~ is not used in the liveness range of ~b~ and any aliases of
+    ~b~. Ie., in between the creation of ~b~ and this point, ~a_mem~ is not
+    used. Same for any aliases of ~b~.
+ 4. The index function of ~b~ can be translated to ~a_mem~ space at the
+    definition of ~b~. Same for any aliases of ~b~.
+
+[[*Cosmins pseudo-code][Cosmins pseudo-code]] is slightly different. Namely, he requires that ~b~ is newly
+created, ie. that it does not alias anything, but I don't think that's necessary
+if we add the "and any aliases" qualifier above.
+
+** In-place updates
+
+Cosmin is also worried about in-place updates. I am not sure why. For instance,
+he says that the alias analysis should contain information about in-place
+updates. Let's try to figure out why.
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let main(arr: []i32) =
+  let b = map (+ 1) arr
+  let b' = rotate 1 b -- `b'` aliases `b`
+  let b'' = b with [0] = 42 -- Should `b` alias `b'` here? What even happens?
+  in map2 (+) b'' b'
+#+end_src
+
+This gives an error:
+
+#+begin_src
+Error at /home/munksgaard/tmp/blob.fut:5:19-20:
+Variable "b'" previously consumed at 4:13-27.  (Possibly through aliasing.)
+
+If you find this error message confusing, uninformative, or wrong, please open an issue at
+https://github.com/diku-dk/futhark/issues.
+#+end_src
+
+Understandable, since the in-place update consumes both ~b~ and ~b'~. But of
+course, the updated ~b~ is still in the same memory block as ~b'~ and the old
+~b~ was.
+
+Let's try to turn that code into something we could perform memory-coalescing
+on.
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let main(b@b_mem: *[]i32) =
+    let b'@b_mem = rotate 1 b -- `b'` aliases `b`
+    let c@c_mem = map (+ 1) b' -- new alloc, last-use of `b'`
+    let b''@b_mem = b with [0] = 42 -- Consumes `b'` and `b''`k
+    let a@a_mem = copy b'' -- new alloc, last use of `b''`
+    in (a, c)
+#+end_src
+
+Here, ~b''~ doesn't have any aliases, but ~b'~ and ~b~ reside in the same
+memory, so we need to ensure that they would also be able to fit in the memory
+of ~a~. The traditional alias-analysis would not show that they reside in the
+same memory block. Perhaps we need to distinguish between alias-relations and
+memory-block-sharing-relations?
+
+Ah, Cosmin simplifies this case by requiring that whatever we copy (or perform
+memory coalescing on) is a "newly created array", meaning that it doesn't alias
+anything, but other things can alias it. I think he additionally means that
+~m_b~ must be newly created, ie. that nothing else is colocated in ~m_b~.
+
+** Simple copy example
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let main(xs: *[]i32) =
+  let ys = map (+ 1) xs -- new alloc
+  let zs = copy ys -- new alloc
+  in zs
+#+end_src
+
+This piece of code turns into two allocations when it could be completely
+allocation-less:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let {segmap_group_size_4085 : i64} =
+    get_size(segmap_group_size_4079, group_size)
+  let {segmap_usable_groups_4086 : i64} =
+    sdiv_up64(impl₀_4054, segmap_group_size_4085)
+  let {binop_y_4094 : i64} = mul_nw64(4i64, impl₀_4054)
+  let {bytes_4093 : i64} = smax64(0i64, binop_y_4094)
+  let {mem_4095 : mem} =
+    alloc(bytes_4093)
+  let {defunc_1_map_res_4087 : [impl₀_4054]i32 @ mem_4095 ->
+                               {base: [impl₀_4054]; contiguous: true;
+                                LMADs: [{offset: 0i64; strides: [1i64];
+                                         rotates: [0i64]; shape: [impl₀_4054];
+                                         permutation: [0];
+                                         monotonicity: [Inc]}]}} =
+    segmap(thread; #groups=segmap_usable_groups_4086; groupsize=segmap_group_size_4085)
+    (gtid_4076 < impl₀_4054) (~phys_tid_4077) : {i32} {
+      let {x_4088 : i32} =
+        xs_4055[gtid_4076]
+      let {defunc_0_f_res_4089 : i32} = add32(1i32, x_4088)
+      return {returns defunc_0_f_res_4089}
+    }
+  let {mem_4098 : mem} =
+    alloc(bytes_4093)
+  let {smaller_replicate_4059 : [impl₀_4054]i32 @ mem_4098 ->
+                                {base: [impl₀_4054]; contiguous: true;
+                                 LMADs: [{offset: 0i64; strides: [1i64];
+                                          rotates: [0i64]; shape: [impl₀_4054];
+                                          permutation: [0];
+                                          monotonicity: [Inc]}]}} =
+    copy(defunc_1_map_res_4087)
+#+end_src
+
+But notice that the allocation of ~mem_4098~ does not dominate the creation of
+~defunc_1_map_res_4087~, so we wouldn't even be able to use cosmins analysis.
+
+Could we pick up the allocation and move it up?
+
+We want to turn it into this:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let {segmap_group_size_4085 : i64} =
+    get_size(segmap_group_size_4079, group_size)
+  let {segmap_usable_groups_4086 : i64} =
+    sdiv_up64(impl₀_4054, segmap_group_size_4085)
+  let {defunc_1_map_res_4087 : [impl₀_4054]i32 @ xs_mem_4091 ->
+                               {base: [impl₀_4054]; contiguous: true;
+                                LMADs: [{offset: 0i64; strides: [1i64];
+                                         rotates: [0i64]; shape: [impl₀_4054];
+                                         permutation: [0];
+                                         monotonicity: [Inc]}]}} =
+    segmap(thread; #groups=segmap_usable_groups_4086; groupsize=segmap_group_size_4085)
+    (gtid_4076 < impl₀_4054) (~phys_tid_4077) : {i32} {
+      let {x_4088 : i32} =
+        xs_4055[gtid_4076]
+      let {defunc_0_f_res_4089 : i32} = add32(1i32, x_4088)
+      return {returns defunc_0_f_res_4089}
+    }
+  in {xs_mem_4091, defunc_1_map_res_4087}
+#+end_src
+
+But, maybe for now it's easier to focus on turning it into this:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let {segmap_group_size_4085 : i64} =
+    get_size(segmap_group_size_4079, group_size)
+  let {segmap_usable_groups_4086 : i64} =
+    sdiv_up64(impl₀_4054, segmap_group_size_4085)
+  let {binop_y_4094 : i64} = mul_nw64(4i64, impl₀_4054)
+  let {bytes_4093 : i64} = smax64(0i64, binop_y_4094)
+  let {mem_4095 : mem} =
+    alloc(bytes_4093)
+  let {defunc_1_map_res_4087 : [impl₀_4054]i32 @ mem_4095 ->
+                               {base: [impl₀_4054]; contiguous: true;
+                                LMADs: [{offset: 0i64; strides: [1i64];
+                                         rotates: [0i64]; shape: [impl₀_4054];
+                                         permutation: [0];
+                                         monotonicity: [Inc]}]}} =
+    segmap(thread; #groups=segmap_usable_groups_4086; groupsize=segmap_group_size_4085)
+    (gtid_4076 < impl₀_4054) (~phys_tid_4077) : {i32} {
+      let {x_4088 : i32} =
+        xs_4055[gtid_4076]
+      let {defunc_0_f_res_4089 : i32} = add32(1i32, x_4088)
+      return {returns defunc_0_f_res_4089}
+    }
+  in {mem_4095, defunc_1_map_res_4087}
+#+end_src
+
+** Simple concat example
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let main(n: i64) =
+  let xs = replicate n 0
+  let ys = replicate n 1
+  let zs = concat xs ys
+  in zs
+#+end_src
+
+Turns into the following:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let {bounds_invalid_upwards_4129 : bool} = slt64(n_4128, 0i64)
+  let {valid_4130 : bool} = not bounds_invalid_upwards_4129
+  let {range_valid_c_4131 : cert} =
+    assert(valid_4130, {"Range ", 0i64 : i64, "..", 1i64 : i64, "..<",
+                        n_4128 : i64, " is invalid."},
+           "/prelude/array.fut:90:3-10")
+  let {binop_y_4137 : i64} = mul_nw64(4i64, n_4128)
+  let {bytes_4136 : i64} = smax64(0i64, binop_y_4137)
+  let {mem_4138 : mem} =
+    alloc(bytes_4136)
+  let {defunc_1_map_res_4132 : [n_4128]i32 @ mem_4138 ->
+                               {base: [n_4128]; contiguous: true;
+                                LMADs: [{offset: 0i64; strides: [1i64];
+                                         rotates: [0i64]; shape: [n_4128];
+                                         permutation: [0];
+                                         monotonicity: [Inc]}]}} =
+    replicate([n_4128], 0i32)
+  let {mem_4141 : mem} =
+    alloc(bytes_4136)
+  let {defunc_1_map_res_4133 : [n_4128]i32 @ mem_4141 ->
+                               {base: [n_4128]; contiguous: true;
+                                LMADs: [{offset: 0i64; strides: [1i64];
+                                         rotates: [0i64]; shape: [n_4128];
+                                         permutation: [0];
+                                         monotonicity: [Inc]}]}} =
+    replicate([n_4128], 1i32)
+  let {conc_tmp_4134 : i64} = add_nw64(n_4128, n_4128)
+  let {binop_y_4143 : i64} =
+    #{range_valid_c_4131}
+    mul_nw64(4i64, conc_tmp_4134)
+  let {bytes_4142 : i64} =
+    #{range_valid_c_4131}
+    smax64(0i64, binop_y_4143)
+  let {mem_4144 : mem} =
+    #{range_valid_c_4131}
+    alloc(bytes_4142)
+  let {++_res_4135 : [conc_tmp_4134]i32 @ mem_4144 ->
+                     {base: [conc_tmp_4134]; contiguous: true;
+                      LMADs: [{offset: 0i64; strides: [1i64]; rotates: [0i64];
+                               shape: [conc_tmp_4134]; permutation: [0];
+                               monotonicity: [Inc]}]}} =
+    #{range_valid_c_4131}
+    concat@0(conc_tmp_4134, defunc_1_map_res_4132, defunc_1_map_res_4133)
+#+end_src
+
+Notice again that the allocation of ~mem_4144~ does not dominate the creation of
+the two replicate arrays.
+
+** What about existentials?
+
+Existentials can come from branches and function returns.
+
+Here's an example:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let main(n: i64) =
+  let xs = if n < 0 then
+             replicate n 0 -- alloc
+           else
+             replicate n 1 -- alloc
+  in copy xs -- alloc
+#+end_src
+
+We should be able to merge these memory blocks too, right? Same here:
+
+#+begin_src futhark -n -r -l "-- ref:%s"
+let main(n: i64) =
+  let xs = if n < 0 then
+             replicate n 0
+           else
+             replicate (n + 1) 1
+  in copy xs
+#+end_src
+
+** Cosmins pseudo-code
+
+#+begin_src haskell -n -r -l "-- ref:%s"
+-- | Array (register) coalescing can have one of three shapes:
+--      a) @let y    = copy(b^{lu})@
+--      b) @let y    = concat(a, b^{lu})@
+--      c) @let y[i] = b^{lu}@
+--   The intent is to use the memory block of the left-hand side
+--     for the right-hand side variable, meaning to store @b@ in
+--     @m_y@ (rather than @m_b@).
+--   The following five safety conditions are necessary:
+--      1. the right-hand side is lastly-used in the current statement
+--      2. the allocation of @m_y@ dominates the creation of @b@
+--      3. there is no use of the left-hand side memory block @m_y@
+--           during the liveness of @b@, i.e., in between its last use
+--           and its creation.
+--      4. @b@ is a newly created array, i.e., does not aliases anything
+--      5. the new index function of @b@ corresponding to memory block @m_y@
+--           can be translated at the definition of @b@, and the
+--           same for all variables aliasing @b@.
+--   Observation: during the live range of @b@, @m_b@ can only be used by
+--                variables aliased with @b@, because @b@ is newly created.
+
+mkCoalsTabBnd lutab (Let pat _ e) td_env bu_env =
+  --   i) Filter @activeCoals@ by the 3rd safety condition:
+  --      The case of in place update in the code below is treated by:
+  --        1. adding the old name b1 to active table, and
+  --        2. inserting an optimistic-dependency between b2 and b1
+  --        Code:
+  --          let b1 = map f a
+  --          ...
+  --          let b2 = b1 with [i] <- e2
+  --          ...
+  --          let x = concat a b2^{lu}
+  --      An eventual promotion to succeeds table happens when
+  --      the definition of b1 is reached (new array created);
+  --      otherwise, if safety fails, the mapping of mem_b is
+  --      removed from active.
+
+  --  ii) promote any of the entries in @activeCoals@ to @successCoals@ as long as
+  --        - this statement defined a variable consumed in a coalesced statement
+  --        - and safety conditions 2, 4, and 5 are satisfied.
+  --      AND extend @activeCoals@ table for any definition of a variable that
+  --      aliases a coalesced variable.
+  --
+  --      Case 1: defintion of a variable @b@ which is aliased with a (latter)
+  --              coalesced variable @a@, see code below. In this case @b@ is
+  --              not yet in the @vartab@ of the active-tab entry of @m_a@.
+  --                 @let a = map f arr  @
+  --                 @let b = transpose a@ <- current statement
+  --                 @ ... use of b ...  @
+  --                 @let x[i] = a       @
+  --              Here, we add variable @b@ to the entry of @m_a@ in active-tab
+  --              (OK since the layout of @a@ does not change)
+  --
+  --      Case 2: we are at the definition of the coalesced variable @b@
+  --              If 2,4,5 hold promote it to successful coalesced table,
+  --              OR if e = reshape/transpose/rotate then postpone decision
+  --              for later on.
+  --              Pseudocode:
+  --                a) if in-place update than ok -> already treated in i)
+  --                b) if new array creation point and 2,4,5 hold then promote to successful
+  --                c) if an alising statement (reshape or copy stmt), e.g.,
+  --                          @let a    = map ...      @
+  --                          @let b    = reshape ... a@ <- current stmt
+  --                          @let x[i] = b@
+  --                       then create a new entry for @a@ in the active-tab entry of @m_b@ (@m_b==m_a@)
+  --                            and treat it by deferring versification of @b@ until the creation of @a@
+  --                            is reached, or recursively. For example the case below should be supported:
+  --                                @let a = if cond then e1 else e2@
+  --                                @let b = reshape ... a@
+  --                                @let x[i] = b@
+  --
+  --
+  -- iii) Finally, record a potentially coalesced statement in @activeCoals@
+  --
+#+end_src
