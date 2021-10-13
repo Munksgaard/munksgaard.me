@@ -105,4 +105,4 @@ https://github.com/Munksgaard/
 
 * Public Key
 
-[[file:publickey.txt][4CE62A90EFC0B9B2]]
+[[file:publickey.txt][5658 4D09 71AF E45F CC29  6BD7 4CE6 2A90 EFC0 B9B2]]
