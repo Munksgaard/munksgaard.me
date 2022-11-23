@@ -10,6 +10,24 @@ functional programming language Futhark. I am a MSc in Computer Science from the
 University of Copenhagen (2015). I like programming languages, programming
 language theory, algorithms, concurrency and parallelism.
 
+* Links
+
+https://sr.ht/~munksgaard/
+
+https://github.com/Munksgaard/
+
+gopher://munksgaard.me
+
+* Papers
+
+ - [[https://futhark-lang.org/publications/sc22-mem.pdf][Memory Optimizations in an Array Language]]. SC22.
+ - [[https://link.springer.com/chapter/10.1007/978-3-030-83978-9_1][Dataset Sensitive Autotuning of Multi-versioned Code Based on Monotonic
+   Properties]]. Presented at TFP 2021.
+ - [[https://www.researchgate.net/profile/Martin-Elsman-2/publication/327498941_Experience_Report_Type-Safe_Multi-Tier_Programming_with_Standard_ML_Modules/links/5b922e89299bf147391fc364/Experience-Report-Type-Safe-Multi-Tier-Programming-with-Standard-ML-Modules.pdf][Experience report: Type-safe multi-tier programming with Standard ML
+   modules]]. ML Family Workshop 2018.
+ - [[file:papers/laumann-munksgaard-larsen.pdf][Session Types for Rust]]. Presented at WGP '15.
+ - [[file:papers/munksgaard-laumann-thesis.pdf][Practical Session Types in Rust]]. MSc thesis, June 2015.
+
 * Futhark
 
  - [[file:futhark/improving-a-benchmark.org][Improving a Futhark benchmark]]
@@ -29,16 +47,6 @@ language theory, algorithms, concurrency and parallelism.
 * toyml
  - [[file:toyml/typechecker.org][Typechecking toyml]]
 
-* Papers
-
- - [[https://futhark-lang.org/publications/sc22-mem.pdf][Memory Optimizations in an Array Language]]. SC22.
- - [[https://link.springer.com/chapter/10.1007/978-3-030-83978-9_1][Dataset Sensitive Autotuning of Multi-versioned Code Based on Monotonic
-   Properties]]. Presented at TFP 2021.
- - [[https://www.researchgate.net/profile/Martin-Elsman-2/publication/327498941_Experience_Report_Type-Safe_Multi-Tier_Programming_with_Standard_ML_Modules/links/5b922e89299bf147391fc364/Experience-Report-Type-Safe-Multi-Tier-Programming-with-Standard-ML-Modules.pdf][Experience report: Type-safe multi-tier programming with Standard ML
-   modules]]. ML Family Workshop 2018.
- - [[file:papers/laumann-munksgaard-larsen.pdf][Session Types for Rust]]. Presented at WGP '15.
- - [[file:papers/munksgaard-laumann-thesis.pdf][Practical Session Types in Rust]]. MSc thesis, June 2015.
-
 * Other projects
 
  - [[file:ordleg][Ordleg]]. A clone of Wordle, in Danish ([[https://git.sr.ht/~munksgaard/ordleg][source]]).
@@ -48,14 +56,6 @@ language theory, algorithms, concurrency and parallelism.
 * Technical diary
 
 [[file:technical-diary/index.org][Technical diary]]
-
-* Links
-
-https://sr.ht/~munksgaard/
-
-https://github.com/Munksgaard/
-
-gopher://munksgaard.me
 
 * Public Key
 
