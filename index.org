@@ -31,6 +31,7 @@ language theory, algorithms, concurrency and parallelism.
 
 * Papers
 
+ - [[https://futhark-lang.org/publications/sc22-mem.pdf][Memory Optimizations in an Array Language]]. SC22.
  - [[https://link.springer.com/chapter/10.1007/978-3-030-83978-9_1][Dataset Sensitive Autotuning of Multi-versioned Code Based on Monotonic
    Properties]]. Presented at TFP 2021.
  - [[https://www.researchgate.net/profile/Martin-Elsman-2/publication/327498941_Experience_Report_Type-Safe_Multi-Tier_Programming_with_Standard_ML_Modules/links/5b922e89299bf147391fc364/Experience-Report-Type-Safe-Multi-Tier-Programming-with-Standard-ML-Modules.pdf][Experience report: Type-safe multi-tier programming with Standard ML
