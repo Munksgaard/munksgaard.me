@@ -116,6 +116,8 @@ https://sr.ht/~munksgaard/
 
 https://github.com/Munksgaard/
 
+gopher://munksgaard.me
+
 * Public Key
 
 [[file:publickey.txt][5658 4D09 71AF E45F CC29  6BD7 4CE6 2A90 EFC0 B9B2]]
