@@ -49,6 +49,7 @@ gopher://munksgaard.me
 
 * Other projects
 
+ - [[https://gist.github.com/Munksgaard/9102f0be2562f7ba1eca32b7e0da643e][Your Phoenix application, directly on your Tailnet]].
  - [[file:ordleg][Ordleg]]. A clone of Wordle, in Danish ([[https://git.sr.ht/~munksgaard/ordleg][source]]).
  - [[https://munksgaard.github.io/bluenoise/][Blue Noise in Futhark]]. An investigation into dithering using Futhark, written
    using ~futhark literate~ ([[https://github.com/Munksgaard/bluenoise/][source]]).
