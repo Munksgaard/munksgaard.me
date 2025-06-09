@@ -36,4 +36,4 @@ Draft papers and papers submitted for formal review are either submitted as
 extended abstracts (4 to 10 pages in length) or as full papers (20 pages).
 #+end_quote
 
-Here's the result: [[orgit-rev:~/src/futhark-papers/::88d821183465f7c3a0d7a9ab6e3faf071013d35f][~/src/futhark-papers/ (magit-rev 88d82118)]]
+Here's the result: [[https://github.com/diku-dk/futhark-papers/commit/88d821183465f7c3a0d7a9ab6e3faf071013d35f][88d82118]]
