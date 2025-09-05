@@ -1,0 +1,44 @@
+-- xs_3955 : [impl₀_3954]i32@@xs_mem_3994->
+-- {base: [impl₀_3954]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+--                                                 rotates: [0i64];
+--                                                 shape: [impl₀_3954];
+--                                                 permutation: [0];
+--                                                 monotonicity: [Inc]}]}
+fun {[impl₀_3954]i32@?0->
+     {base: [impl₀_3954]; contiguous: True; LMADs: [{offset: 0i64;
+                                                     strides: [1i64];
+                                                     rotates: [0i64];
+                                                     shape: [impl₀_3954];
+                                                     permutation: [0];
+                                                     monotonicity: [Inc]}]},
+     [impl₀_3954]i32@?1->
+     {base: [impl₀_3954]; contiguous: True; LMADs: [{offset: 0i64;
+                                                     strides: [1i64];
+                                                     rotates: [0i64];
+                                                     shape: [impl₀_3954];
+                                                     permutation: [0];
+                                                     monotonicity: [Inc]}]}}
+and_plus_one_3876 (mem xs_mem_3994, i64 impl₀_3954, [impl₀_3954]i32 xs_3955) = {
+  let {i64 segmap_group_size_3988} =
+    get_size(segmap_group_size_3982, group_size)
+  let {i64 segmap_usable_groups_3989} =
+    sdiv_up64(impl₀_3954, segmap_group_size_3988)
+  let {i64 bytes_3996} = mul_nw64(4i64, impl₀_3954)
+  let {mem mem_3997} =
+    alloc(bytes_3996)
+  -- defunc_1_map_res_3990 : [impl₀_3954]i32@@mem_3997-> -- ref:and_plus_one_gpu_@
+  -- {base: [impl₀_3954]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+  --                                                 rotates: [0i64];
+  --                                                 shape: [impl₀_3954];
+  --                                                 permutation: [0];
+  --                                                 monotonicity: [Inc]}]}
+  let {[impl₀_3954]i32 defunc_1_map_res_3990} =
+    segmap_thread
+    (#groups=segmap_usable_groups_3989; groupsize=segmap_group_size_3988)
+    (gtid_3979 < impl₀_3954) (~phys_tid_3980) : {i32} {
+      let {i32 x_3991} = xs_3955[gtid_3979]
+      let {i32 defunc_0_f_res_3992} = add32(1i32, x_3991)
+      return {returns defunc_0_f_res_3992}
+    }
+  in {xs_mem_3994, mem_3997, xs_3955, defunc_1_map_res_3990}
+}

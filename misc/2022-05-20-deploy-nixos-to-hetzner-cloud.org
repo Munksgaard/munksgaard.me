@@ -1,0 +1,11 @@
+#+TITLE: Deploying NixOS to Hetzner Cloud
+#+DATE: <2022-05-20 Fri>
+
+These are the steps necessary to deploy a NixOS image to a Hetzner Cloud
+instance.
+
+* Create a server
+
+Using Hetzner Clouds online interface, create a new server. I've opted to create
+an Ubuntu 20.04 on the smallest instance (CX11) at Helsinki
+(eu-central). Remember to add your SSH key. Then, as

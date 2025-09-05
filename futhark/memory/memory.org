@@ -1,0 +1,335 @@
+#+options: ':nil *:t -:t ::t <:t H:3 \n:nil ^:t arch:headline author:t
+#+options: broken-links:nil c:nil creator:nil d:(not "LOGBOOK") date:t e:t
+#+options: email:nil f:t inline:t num:t p:nil pri:nil prop:nil stat:t tags:t
+#+options: tasks:t tex:t timestamp:t title:t toc:t todo:t |:t
+#+title: Statically Optimizing Memory Usage in Futhark
+#+date: \today
+#+author: Philip Munksgaard
+#+email: philip@munksgaard.me
+#+language: en
+#+select_tags: export
+#+exclude_tags: noexport
+#+creator: Emacs 27.1 (Org mode 9.4.4)
+#+latex_class: article
+#+latex_class_options:
+#+latex_header_extra: \usepackage{fontspec}
+#+description:
+#+keywords:
+#+subtitle:
+
+* Motivation
+
+Futhark is a pure, functional array programming language. It has no notion of
+memory or resources, so it is entirely up to the compiler to transform the
+programs written by users into something that maps to the physical reality,
+including supporting a notion of memory.
+
+#+name: and_plus_one
+#+caption: A simple futhark function.
+#+begin_src futhark -n -r -l "-- ref:%s"
+  entry and_plus_one (xs: *[]i32): *[](i32, i32) =
+    map (\x -> (x, x + 1)) xs
+#+end_src
+
+As a short example, consider the ~and_plus_one~ function shown in figure
+[[and_plus_one]]. Each element of the input array is turned into a pair containing
+the original value and its successor. During compilation, the Futhark compiler
+will insert memory and turn it into the code shown in figure [[and_plus_one_kernelsmem]].
+
+#+name: and_plus_one_kernelsmem
+#+caption: Futhark IR for the ~and_plus_one~ function.
+#+begin_src futhark -n -r -l "-- ref:%s"
+  -- xs_4000 : *[impl₀_3999]i32@@xs_mem_4071->
+  -- {base: [impl₀_3999]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+  --                                                 rotates: [0i64];
+  --                                                 shape: [impl₀_3999];
+  --                                                 permutation: [0];
+  --                                                 monotonicity: [Inc]}]}
+  entry {*[impl₀_3999]i32@?0->
+         {base: [impl₀_3999]; contiguous: True; LMADs: [{offset: 0i64;
+                                                         strides: [1i64];
+                                                         rotates: [0i64];
+                                                         shape: [impl₀_3999];
+                                                         permutation: [0];
+                                                         monotonicity: [Inc]}]},
+         ,*[impl₀_3999]i32@?1->
+         {base: [impl₀_3999]; contiguous: True; LMADs: [{offset: 0i64;
+                                                         strides: [1i64];
+                                                         rotates: [0i64];
+                                                         shape: [impl₀_3999];
+                                                         permutation: [0];
+                                                         monotonicity: [Inc]}]}}
+  and_plus_one (mem xs_mem_4071, i64 impl₀_3999, *[impl₀_3999]i32 xs_4000) = {
+    let {i64 bytes_4072} = mul_nw64(4i64, impl₀_3999)
+    let {mem mem_4073} =
+      alloc(bytes_4072)                    -- ref:and_plus_one_kernelsmem_alloc_1
+    -- defunc_1_map_res_4001 : [impl₀_3999]i32@@mem_4073->
+    -- {base: [impl₀_3999]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+    --                                                 rotates: [0i64];
+    --                                                 shape: [impl₀_3999];
+    --                                                 permutation: [0];
+    --                                                 monotonicity: [Inc]}]}
+    let {[impl₀_3999]i32 defunc_1_map_res_4001} = copy(xs_4000) -- ref:and_plus_one_kernelsmem_copy
+    let {i64 segmap_group_size_4035} =
+      get_size(segmap_group_size_4029, group_size)
+    let {i64 segmap_usable_groups_4036} =
+      sdiv_up64(impl₀_3999, segmap_group_size_4035)
+    let {i64 bytes_4075} = bytes_4072
+    let {mem mem_4076} =
+      alloc(bytes_4072)                    -- ref:and_plus_one_kernelsmem_alloc_2
+    -- defunc_1_map_res_4037 : [impl₀_3999]i32@@mem_4076->
+    -- {base: [impl₀_3999]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+    --                                                 rotates: [0i64];
+    --                                                 shape: [impl₀_3999];
+    --                                                 permutation: [0];
+    --                                                 monotonicity: [Inc]}]}
+    let {[impl₀_3999]i32 defunc_1_map_res_4037} =
+      segmap_thread
+      (#groups=segmap_usable_groups_4036; groupsize=segmap_group_size_4035)
+      (gtid_4026 < impl₀_3999) (~phys_tid_4027) : {i32} {
+        let {i32 x_4038} = xs_4000[gtid_4026]
+        let {i32 defunc_0_f_res_4039} = add32(1i32, x_4038)
+        return {returns defunc_0_f_res_4039}
+      }
+    in {mem_4073, mem_4076, defunc_1_map_res_4001, defunc_1_map_res_4037}
+  }
+#+end_src
+
+We can see the memory allocations inserted by the compiler on lines
+[[(and_plus_one_kernelsmem_alloc_1)]] and [[(and_plus_one_kernelsmem_alloc_2)]]. For the
+most part, Futhark does not currently attempt to optimize these memory
+allocations in any way, but merely inserts them where necessary.
+
+It is important to mention here, that the allocations shown above do not
+necessarily translate into actual on-device allocations. Futhark statically
+determines which allocations are needed, but the compiled program additionally
+contains a dynamic memory allocator, which can reuse already allocated memory if
+it has been freed. The result is that the statically determined memory usage
+constitutes an upper bound of the actual memory usage.
+
+When using Futhark, we are most often trying to make something run fast on a
+GPU. Physical allocations, meaning that the dynamic allocator does not have any
+appropriate memory blocks it can reuse, take time. So reducing the number of
+such allocations is the most obvious benefit of reducing memory usage of Futhark
+programs.
+
+Each allocation inserted by the Futhark compiler also potentially uses up
+valuable memory on the GPU. By reducing the memory usage, we enable more
+programs to run on the GPU. For instance, many programs benefit from intra-group
+parallelism and using shared memory to reduce the number of global memory
+acccesses (which are slow). However, the amount of shared memory on GPUs can be
+quite limited. If we can statically determine a lower bound on the shared memory
+needed, we can some programs will be safely able to run with larger datasets
+than before.
+
+Copies may not seem directly related to allocations, but if we can statically
+merge some memory blocks, that will allow us to reduce the number of copies in
+some programs. Consider again the ~and_plus_one~ function in figure
+[[and_plus_one]]: The input array is consumed by the function, so it or its aliases
+cannot be used anywhere else. Furthermore, ~xs~ is used nowhere besides as an
+argument to map. Therefore, instead of allocating a new memory block for the
+first result of the entry (which is really just the input), we should be to
+reuse ~xs_mem_4071~ /and/ get rid of the copy on line
+[[(and_plus_one_kernelsmem_copy)]].
+
+* ReuseAllocations
+
+** LastUse
+
+** Interference
+
+** GreedyColoring
+
+** ReuseAllocations
+
+* OptionPricing
+
+** Introduction
+
+** Before
+
+** After
+
+** Benchmark results
+
+* LocVolCalib
+
+** Introduction
+
+** Before
+
+** After
+
+** Benchmark results
+
+* LUD
+
+Unfortunately, there are many benchmarks for which the optimization techniques
+in ReuseAllocations is too simplistic. One such benchmark is the [[file:~/src/futhark-benchmarks/rodinia/lud/lud.fut][LUD]]
+benchmark. LUD computes the LU-decomposition of a matrix. The bulk of the code
+is made up by four functions: ~lud_diagonal~, ~lud_internal~,
+~lud_perimeter_upper~ and ~lud_perimeter_lower~, of which the two latter are
+almost identical.
+
+#+name: lud_perimeter_upper
+#+caption: Futhark code for ~lud_perimeter_upper~.
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let lud_perimeter_upper [m][b] (diag: [b][b]f32, a0s: [m][b][b]f32): *[m][b][b]f32 =
+      let a1s = map transpose a0s in
+      let a2s =
+          map  (\a1: [b][b]f32 ->
+                map  (\row0: [b]f32 ->                     -- ref:lud-upper-inner-map
+                      loop row = copy row0 for i < b do       -- ref:lud-upper-l2
+                      let sum = loop sum=0.0f32 for k < i do  -- ref:lud-upper-l1
+                                  sum + diag[i,k] * row[k]    -- ref:lud-upper-s1
+                      let row[i] = row[i] - sum               -- ref:lud-upper-s2
+                      in  row
+                     ) a1
+               ) a1s
+      in map transpose a2s
+#+end_src
+
+Let's take a look at ~lud_perimeter_upper~, as shown in figure
+[[lud_perimeter_upper]]. It takes an $b \times b$ matrix ~diag~ and a list of $m$ $b
+\times b$ matrices a0s. The inner map, starting on line [[(lud-upper-inner-map)]],
+processes the rows of a given matrix: Each element is processed in sequence by
+multiplying all the updated earlier elements with the row elements of
+~diag~. Interestingly, this could be done entirely in-place, because updating
+element $k$ of ~row~ only depends on updated elements with index less than $k$.
+
+The question is, how can we teach Futhark to recognize a pattern such as this,
+and optimise it to do the updates in-place? Inspired by cite:oancea-2012-logic,
+let's try to summarize the accesses of the innermost map.
+
+The access of $row[k]$ on line [[(lud-upper-s1)]] accesses $a1s[M b^2 + N b + k]$,
+where $M$ and $N$ are some indices into the $a1s$ and $a1$ arrays as given by
+the maps. Aggregating the accesses over the loop on line [[(lud-upper-l1)]] gives us
+the LMAD $[1] \vee [i] + M b^2 + N b$, which states that the loop accesses with
+a step of one, a span of $i$ and an offset of $M b^2 + N b$. Aggregating over
+the outer loop on line [[(lud-upper-l2)]] gives us $[1] \vee [b] + M b^2 + N b$,
+while the two outer maps leaves us at $[1, b, b^2] \vee [b, b^2, b^2m] + 0$.
+There are two accesses on line [[(lud-upper-s2)]], a read and a write. Both are both
+described by the same LMAD as the previous read.
+
+The question is now, what can we do with this? The technique described in
+cite:oancea-2012-logic puts these accesses into three different sets: ReadOnly,
+WriteFirst and ReadWrite, and the accesses in ~lud_perimeter_upper~ all come out
+as ReadWrite. For our goal of reusing the memory blocks, however, that's not
+really helpful, as ReadWrite does not guarantee that the contents are not read
+after the write.
+
+
+#+name: lud_perimeter_upper_kernelsmem
+#+caption: KernelsMem representation of ~lud_perimeter_upper~.
+#+begin_src futhark -n -r -l "-- ref:%s"
+  let {mem mem_18865} =
+    alloc(bytes_18862)
+  -- defunc_3_map_res_15957 : [j_m_i_13971][32i64][32i64]f32@@mem_18865->
+  -- {base: [32i64, j_m_i_13971, 32i64]; contiguous: True; LMADs: [{offset: 0i64;
+  --                                                                strides: [mul_nw64 (32i64) (j_m_i_13971), 32i64, 1i64];
+  --                                                                rotates: [0i64, 0i64, 0i64];
+  --                                                                shape: [32i64, j_m_i_13971, 32i64];
+  --                                                                permutation: [1, 2, 0];
+  --                                                                monotonicity: [Inc, Inc, Inc]}]}
+  let {[j_m_i_13971][32i64][32i64]f32 defunc_3_map_res_15957} =
+    segmap_thread
+    (#groups=num_groups_15955; groupsize=segmap_group_size_15954; virtualise)
+    (gtid_15888 < j_m_i_13971,
+     gtid_15889 < 32i64) (~phys_tid_15890) : {[32i64]f32} {
+      -- x_15958 aliases a0s_transformed_13987
+      -- x_15958 : [32i64]f32@@mem_18695->
+      -- {base: [num_blocks_13828, num_blocks_13828, 32i64, 32i64]; contiguous: False;
+      --  LMADs: [{offset: add_nw64 (add_nw64 (add_nw64 (mul_nw64 (step_13880) (y_14521)) (mul_nw64 (1024i64) (i_13970))) (mul_nw64 (gtid_15888) (1024i64))) (gtid_15889);
+      --           strides: [32i64]; rotates: [0i64]; shape: [32i64]; permutation: [0];
+      --           monotonicity: [Inc]}]}
+      let {[32i64]f32 x_15958} = a0s_transformed_13987[gtid_15888,
+                                                       gtid_15889,
+                                                       0i64:+32i64*1i64]
+      let {mem@[32i64]f32 mem_18847} =
+        alloc(128i64, @[32i64]f32)
+      -- smaller_replicate_15959 : [32i64]f32@@mem_18847->
+      -- {base: [32i64]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+      --                                            rotates: [0i64]; shape: [32i64];
+      --                                            permutation: [0];
+      --                                            monotonicity: [Inc]}]}
+      let {[32i64]f32 smaller_replicate_15959} = copy(x_15958)
+      -- defunc_0_f_res_15960 : [32i64]f32@@mem_18847->
+      -- {base: [32i64]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+      --                                            rotates: [0i64]; shape: [32i64];
+      --                                            permutation: [0];
+      --                                            monotonicity: [Inc]}]}
+      let {[32i64]f32 defunc_0_f_res_15960} =
+        -- Consumes smaller_replicate_15959
+        -- row_15962 : *[32i64]f32@@mem_18847->
+        -- {base: [32i64]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+        --                                            rotates: [0i64]; shape: [32i64];
+        --                                            permutation: [0];
+        --                                            monotonicity: [Inc]}]}
+        loop {*[32i64]f32 row_15962} = {smaller_replicate_15959}
+        for i_15961:i32 < 32i32 do {
+          let {i64 i_15963} = sext i32 i_15961 to i64
+          let {f32 sum_15964} =
+            loop {f32 sum_15966} = {0.0f32}
+            for k_15965:i32 < i_15961 do {
+              let {i64 k_15967} = sext i32 k_15965 to i64
+              let {bool y_15968} = slt64(k_15967, 32i64)
+              let {cert index_certs_15969} =
+                assert(y_15968, "Index [", i_15963, ", ", k_15967,
+                                "] out of bounds for array of shape [",
+                                32i64, "][", 32i64, "].",
+                       "/home/munksgaard/src/futhark-benchmarks/rodinia/lud/lud.fut:62:67-75")
+              let {f32 x_15970} =
+                <index_certs_13878, index_certs_15969>
+                defunc_3_map_res_13887[0i64, i_15963, k_15967]
+              let {cert index_certs_15971} =
+                assert(y_15968, "Index [", k_15967,
+                                "] out of bounds for array of shape [",
+                                32i64, "].",
+                       "/home/munksgaard/src/futhark-benchmarks/rodinia/lud/lud.fut:62:79-84")
+              let {f32 y_15972} =
+                <index_certs_15971>
+                row_15962[k_15967]
+              let {f32 y_15973} = fmul32(x_15970, y_15972)
+              let {f32 loopres_15974} = fadd32(sum_15966, y_15973)
+              in {loopres_15974}
+            }
+          let {f32 x_15975} = row_15962[i_15963]
+          let {f32 lw_val_15976} = fsub32(x_15975, sum_15964)
+          -- row_15977 : [32i64]f32@@mem_18847->
+          -- {base: [32i64]; contiguous: True; LMADs: [{offset: 0i64; strides: [1i64];
+          --                                            rotates: [0i64]; shape: [32i64];
+          --                                            permutation: [0];
+          --                                            monotonicity: [Inc]}]}
+          let {[32i64]f32 row_15977} =
+            -- Consumes row_15962
+            row_15962 with [i_15963] <- lw_val_15976
+          in {row_15977}
+        }
+      return {returns defunc_0_f_res_15960}
+    }
+#+end_src
+
+Scratch all that, we should be looking at the KernelsMem output, shouldn't we?
+Figure [[lud_perimeter_upper_kernelsmem]] shows the KernelsMem representation of
+(the relevant part of) ~lud_perimeter_upper~. Notice that everything is written
+and read to and from ~mem_18847~, which is freshly allocated.
+
+* NW
+
+The [[file:~/src/futhark-benchmarks/rodinia/nw/nw.fut][NW]] benchmark is parallel implementation of the Needleman-Wunsch algorithm, a
+dynamic programming algorithm for comparing DNA sequences. The basic algorithm
+works by iteratively updating a matrix, with each value depending on the result
+of the results to the top, left and top-left. Parallelism is achieved by working
+on anti-diagonal blocks that are independent of each other. In its current
+incarnation, it has some unnecessary allocations: all results are first written
+to an intermediary value inside ~intraBlockPar~, and only afterwards are they
+written into the result matrix. However, since all accesses below and to the
+right of the first row and column are strictly WriteFirst, and because the main
+function consumes its argument, it should be possible to do the entire algorithm
+in-place. But how do we teach the compiler this?
+
+* What now?
+
+
+bibliographystyle:unsrt
+bibliography:memory.bib
